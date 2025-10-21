@@ -1,0 +1,160 @@
+#pragma kernel PyramidGenerationPass // 0
+
+#include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Common.hlsl"
+
+#define ThreadCount (16)
+#define DepthPyramidResolution (256)
+
+globallycoherent RWTexture2D<half> _Mip0;
+globallycoherent RWTexture2D<half> _Mip1;
+globallycoherent RWTexture2D<half> _Mip2;
+globallycoherent RWTexture2D<half> _Mip3;
+globallycoherent RWTexture2D<half> _Mip4;
+globallycoherent RWTexture2D<half> _Mip5;
+globallycoherent RWTexture2D<half> _Mip6;
+globallycoherent RWTexture2D<half> _Mip7;
+
+[numthreads(ThreadCount, ThreadCount, 1)]
+void PyramidGenerationPass(uint3 dtid : SV_DispatchThreadID, uint gtid : SV_GroupIndex, uint3 gid : SV_GroupId)
+{
+	// we can't write to mips when using a RWTexture2D, so we manually unroll the loop with each mip bound to a named resource view
+	half4 depth;
+	uint dimension = DepthPyramidResolution / ThreadCount;
+
+	// mip 0 to 1
+    depth.x = _Mip0[mad(dtid.xy, 2, uint2(0, 0))].x;
+	depth.y = _Mip0[mad(dtid.xy, 2, uint2(1, 0))].x;
+	depth.z = _Mip0[mad(dtid.xy, 2, uint2(0, 1))].x;
+	depth.w = _Mip0[mad(dtid.xy, 2, uint2(1, 1))].x;
+#if defined(UNITY_REVERSED_Z)
+	_Mip1[dtid.xy] = min(min(min(depth.x, depth.y), depth.z), depth.w);
+#else
+	_Mip1[dtid.xy] = max(max(max(depth.x, depth.y), depth.z), depth.w);
+#endif
+
+	AllMemoryBarrierWithGroupSync();
+
+	// 16 to 8 groups
+	dimension /= 2;
+	[branch] if (gid.x >= dimension || gid.y >= dimension)
+		return;
+
+	dtid.xy /= 2;
+	gid.xy /= 2;
+
+	// mip 1 to 2
+	depth.x = _Mip1[mad(dtid.xy, 2, uint2(0, 0))].x;
+	depth.y = _Mip1[mad(dtid.xy, 2, uint2(1, 0))].x;
+	depth.z = _Mip1[mad(dtid.xy, 2, uint2(0, 1))].x;
+	depth.w = _Mip1[mad(dtid.xy, 2, uint2(1, 1))].x;
+#if defined(UNITY_REVERSED_Z)
+	_Mip2[dtid.xy] = min(min(min(depth.x, depth.y), depth.z), depth.w);
+#else
+	_Mip2[dtid.xy] = max(max(max(depth.x, depth.y), depth.z), depth.w);
+#endif
+
+	AllMemoryBarrierWithGroupSync();
+
+	// 8 to 4 groups
+	dimension /= 2;
+	[branch] if (gid.x >= dimension || gid.y >= dimension)
+		return;
+
+	dtid.xy /= 2;
+	gid.xy /= 2;
+
+	// mip 2 to 3
+	depth.x = _Mip2[mad(dtid.xy, 2, uint2(0, 0))].x;
+	depth.y = _Mip2[mad(dtid.xy, 2, uint2(1, 0))].x;
+	depth.z = _Mip2[mad(dtid.xy, 2, uint2(0, 1))].x;
+	depth.w = _Mip2[mad(dtid.xy, 2, uint2(1, 1))].x;
+#if defined(UNITY_REVERSED_Z)
+	_Mip3[dtid.xy] = min(min(min(depth.x, depth.y), depth.z), depth.w);
+#else
+	_Mip3[dtid.xy] = max(max(max(depth.x, depth.y), depth.z), depth.w);
+#endif
+
+	AllMemoryBarrierWithGroupSync();
+
+	// 4 to 2 groups
+	dimension /= 2;
+	[branch] if (gid.x >= dimension || gid.y >= dimension)
+		return;
+
+	dtid.xy /= 2;
+	gid.xy /= 2;
+
+	// mip 3 to 4
+	depth.x = _Mip3[mad(dtid.xy, 2, uint2(0, 0))].x;
+	depth.y = _Mip3[mad(dtid.xy, 2, uint2(1, 0))].x;
+	depth.z = _Mip3[mad(dtid.xy, 2, uint2(0, 1))].x;
+	depth.w = _Mip3[mad(dtid.xy, 2, uint2(1, 1))].x;
+#if defined(UNITY_REVERSED_Z)
+	_Mip4[dtid.xy] = min(min(min(depth.x, depth.y), depth.z), depth.w);
+#else
+	_Mip4[dtid.xy] = max(max(max(depth.x, depth.y), depth.z), depth.w);
+#endif
+
+	AllMemoryBarrierWithGroupSync();
+
+	// 2 to 1 group
+	dimension /= 2;
+	[branch] if (gid.x >= dimension || gid.y >= dimension)
+		return;
+
+	dtid.xy /= 2;
+	gid.xy /= 2;
+
+	// mip 4 to 5
+	depth.x = _Mip4[mad(dtid.xy, 2, uint2(0, 0))].x;
+	depth.y = _Mip4[mad(dtid.xy, 2, uint2(1, 0))].x;
+	depth.z = _Mip4[mad(dtid.xy, 2, uint2(0, 1))].x;
+	depth.w = _Mip4[mad(dtid.xy, 2, uint2(1, 1))].x;
+#if defined(UNITY_REVERSED_Z)
+	_Mip5[dtid.xy] = min(min(min(depth.x, depth.y), depth.z), depth.w);
+#else
+	_Mip5[dtid.xy] = max(max(max(depth.x, depth.y), depth.z), depth.w);
+#endif
+
+	AllMemoryBarrierWithGroupSync();
+
+	dimension = ThreadCount;
+
+	// 16 to 8 threads
+	dimension /= 2;
+	[branch] if (dtid.x < dimension && dtid.y < dimension)
+	{
+		dtid.xy /= 2;
+
+		// mip 5 to 6
+		depth.x = _Mip5[mad(dtid.xy, 2, uint2(0, 0))].x;
+		depth.y = _Mip5[mad(dtid.xy, 2, uint2(1, 0))].x;
+		depth.z = _Mip5[mad(dtid.xy, 2, uint2(0, 1))].x;
+		depth.w = _Mip5[mad(dtid.xy, 2, uint2(1, 1))].x;
+#if defined(UNITY_REVERSED_Z)
+		_Mip6[dtid.xy] = min(min(min(depth.x, depth.y), depth.z), depth.w);
+#else
+		_Mip6[dtid.xy] = max(max(max(depth.x, depth.y), depth.z), depth.w);
+#endif
+	}
+
+	AllMemoryBarrierWithGroupSync();
+
+	// 8 to 4 threads
+	dimension /= 2;
+	[branch] if (dtid.x < dimension && dtid.y < dimension)
+	{
+		dtid.xy /= 2;
+
+		// mip 6 to 7
+		depth.x = _Mip6[mad(dtid.xy, 2, uint2(0, 0))].x;
+		depth.y = _Mip6[mad(dtid.xy, 2, uint2(1, 0))].x;
+		depth.z = _Mip6[mad(dtid.xy, 2, uint2(0, 1))].x;
+		depth.w = _Mip6[mad(dtid.xy, 2, uint2(1, 1))].x;
+#if defined(UNITY_REVERSED_Z)
+		_Mip7[dtid.xy] = min(min(min(depth.x, depth.y), depth.z), depth.w);
+#else
+		_Mip7[dtid.xy] = max(max(max(depth.x, depth.y), depth.z), depth.w);
+#endif
+	}
+}

@@ -1,0 +1,648 @@
+#pragma kernel FeedbackSortPass // 0
+#pragma kernel PageOcclusionPass // 1
+#pragma kernel ClusterOcclusionPass // 2
+#pragma kernel TriangleOcclusionPass // 3
+#pragma kernel TrianglePreparePass // 4
+#pragma kernel ShadowTriangleOcclusionPass // 5
+#pragma kernel OffsetScanPass // 6
+#pragma kernel InitArgumentPass // 7
+#pragma kernel ResetArgumentPass // 8
+#pragma kernel ResetFlagPass // 9
+
+#if defined(SHADER_API_VULKAN)
+//#define VMESH_DXC_FEATURES 1
+#endif
+
+#if defined(VMESH_DXC_FEATURES)
+#pragma use_dxc
+#pragma require Native16Bit
+#pragma require WaveBasic
+#pragma require WaveBallot
+#pragma require WaveMath
+#endif
+
+#pragma multi_compile _ VMESH_SHADOW_CASCADE_0 VMESH_SHADOW_CASCADE_1 VMESH_SHADOW_CASCADE_2 VMESH_SHADOW_CASCADE_3
+
+//#pragma enable_d3d11_debug_symbols
+
+#include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Common.hlsl"
+#include "Packages/com.unity.render-pipelines.core/ShaderLibrary/CommonMaterial.hlsl"
+#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+#include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Shadows.hlsl"
+#include "Packages/com.unity.virtualmesh/Runtime/ShaderLibrary/ComputeCommon.hlsl"
+
+groupshared uint3 InstanceDataLDS;
+groupshared uint IndexCounterLDS = 0;
+
+[numthreads(MaxMemoryPageCount, 1, 1)]
+void FeedbackSortPass(uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint gid : SV_GroupIndex)
+{
+    const uint id = dtid.x;
+
+	// TODO optimize all this or switch to radix sort
+    FeedbackSortLDS[gid] = FeedbackBufferUAV.Load(id * 4);
+    GroupMemoryBarrierWithGroupSync();
+
+    for (uint j = SortLevel >> 1; j > 0; j >>= 1)
+    {
+        uint value = (FeedbackSortLDS[gid & ~j] >> 20 > FeedbackSortLDS[gid | j] >> 20 == (bool)(SortLevel & id)) ? FeedbackSortLDS[gid ^ j] : FeedbackSortLDS[gid];
+        GroupMemoryBarrierWithGroupSync();
+        FeedbackSortLDS[gid] = value;
+        GroupMemoryBarrierWithGroupSync();
+    }
+
+    FeedbackBufferUAV.Store(id * 4, FeedbackSortLDS[gid]);
+}
+
+[numthreads(64, 1, 1)]
+void PageOcclusionPass(uint3 dtid : SV_DispatchThreadID)
+{
+    uint id = dtid.x;
+	[branch] if (id >= TotalPageCount)
+		return;
+
+    uint4 data = PageDataBufferSRV.Load4(id * 4 * 4);
+
+    half3 posCenter = (half3)f16tof32(data.xyz >> 16);
+    half3 posExtent = (half3)f16tof32(data.xyz);
+    half posRadius = length(posExtent);
+
+    bool cullPage = data.w == 0 || FrustumCullSphere(posCenter, posRadius);
+
+	half depth = 0.0;
+    uint tooFar = 1 - step(distance((half3)_WorldSpaceCameraPos, posCenter), posRadius + asfloat(CameraLoadDistanceThreshold));
+	[branch] if (tooFar)
+	{
+		FeedbackBufferUAV.Store(id * 4, ((id << 1) & 0xfffff) + tooFar);
+		return;
+	}
+
+    half4 boundBox = ProjectAABBToScreenSpace(posCenter, posExtent, depth);
+
+	// sample depth pyramid
+    uint level = ComputeSampleLevel(boundBox);
+    half cameraSampledDepth = SampleDepthPyramid(level, boundBox);
+
+	// output feedback
+#if defined(UNITY_REVERSED_Z)
+	[branch] if (cameraSampledDepth < depth && level && !cullPage)
+#else
+	[branch] if (cameraSampledDepth > depth && level && !cullPage)
+#endif
+	{
+		half2 size = (boundBox.zw - boundBox.xy);
+        uint feedback = (mad((uint)saturate(max(size.x, size.y)), 4094, 1) << 20) | ((id << 1) & 0xfffff); // quantize over 12 bits - 1
+		FeedbackBufferUAV.Store(id * 4, feedback);
+	}
+	else
+		FeedbackBufferUAV.Store(id * 4, (id << 1) & 0xfffff);
+}
+
+[numthreads(128, 1, 1)]
+void ClusterOcclusionPass(uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID)
+{
+    uint id = DispatchPassOffset + dtid.x;
+	[branch] if (id >= TotalInstanceCount)
+		return;
+
+	// early out if page data is dirty
+    uint pageIndex = floor(id * rcp(MemoryPageMaxInstanceCount));
+    uint instanceIndex = id % (uint)MemoryPageMaxInstanceCount;
+    int status = asint(PageStatusBufferSRV.Load(pageIndex * 4));
+	[branch] if (status == -1 || instanceIndex >= PageDataBufferSRV.Load(mad(status, 16, 12)))
+		return;
+
+	uint4 instanceData = InstanceDataBuffer.Load4(id * 16);
+    instanceData.xy = mad((uint2)pageIndex, uint2(IndexValuePageStride, VertexValuePageStride), instanceData.xy);
+    
+    uint indexCount = instanceData.z >> 24;
+    uint groupID = mad(pageIndex, GroupDataValuePageStride, (instanceData.z & 0xffffff) >> 2);
+
+	// compiler should skip the f32 conversions
+    uint4 gdata = GroupDataBuffer.Load4(groupID * 16);
+    half3 posCenter = (half3)f16tof32(gdata.xyz >> 16);
+    half3 posExtent = (half3)f16tof32(gdata.xyz);
+    half posRadius = length(posExtent);
+    uint materialID = gdata.w >> 16;
+    uint lodType = instanceData.z & 0x3;
+
+	// select LODs
+    half2 error = mad((half2)LODSwitchThreshold, distance((half3)_WorldSpaceCameraPos, posCenter) - posRadius, -half2(f16tof32(instanceData.w), f16tof32(instanceData.w >> 16)));
+    bool selectLOD = !FrustumCullSphere(posCenter, posRadius) // frustum culling
+		&& (lodType == 0 // standalone cluster
+        || (lodType == 1 && error.y < 0.0) // leaf cluster
+		|| (lodType == 2 && (error.x >= 0.0 && error.y < 0.0)) // intermediate cluster
+		|| (lodType == 3 && error.x >= 0.0)); // root cluster
+    bool selectShadowLOD = lodType == 0 || lodType == 3; // standalone and root clusters for shadows
+    
+    [branch] if (!selectLOD && !selectShadowLOD)
+        return;
+
+    half depth = 0.0;
+	half4 boundBox = ProjectAABBToScreenSpace(posCenter, posExtent, depth);
+
+	// sample depth pyramid
+    uint level = ComputeSampleLevel(boundBox);
+    half cameraSampledDepth = SampleDepthPyramid(level, boundBox);
+	
+	// output visibility
+#if defined(UNITY_REVERSED_Z)
+	[branch] if (cameraSampledDepth < depth)
+#else
+	[branch] if (cameraSampledDepth > depth)
+#endif
+	{
+        [branch] if (selectShadowLOD)
+        {
+#if defined(VMESH_DXC_FEATURES)
+            uint localCount = WaveActiveSum(1);
+        
+            uint offset;
+	        if (WaveIsFirstLane())
+		        DispatchArgsBufferUAV.InterlockedAdd(12, localCount, offset);
+	        uint currentIndex = WaveReadLaneFirst(offset) + WavePrefixSum(1);
+#else
+            uint currentIndex;
+            DispatchArgsBufferUAV.InterlockedAdd(12, 1, currentIndex);
+#endif
+            ShadowTriangleDataBufferUAV.Store3(currentIndex * 12, instanceData.xyz);
+        }
+        
+        [branch] if (selectLOD)
+        {
+#if defined(VMESH_DXC_FEATURES)
+		    if (WaveActiveAllTrue(materialID == WaveReadLaneFirst(materialID)))
+		    {
+			    uint localIndexCount = WaveActiveSum(indexCount);
+
+			    if (WaveIsFirstLane())
+				    DrawArgsBufferUAV.InterlockedAdd(mad(materialID, 20, 8), localIndexCount);
+		    }
+		    else
+			    DrawArgsBufferUAV.InterlockedAdd(mad(materialID, 20, 8), indexCount);
+		
+		    uint localCount = WaveActiveSum(1);
+
+		    uint offset;
+		    if (WaveIsFirstLane())
+			    DispatchArgsBufferUAV.InterlockedAdd(0, localCount, offset);
+		    uint currentIndex = WaveReadLaneFirst(offset) + WavePrefixSum(1);
+#else
+            DrawArgsBufferUAV.InterlockedAdd(mad(materialID, 20, 8), indexCount);
+		
+            uint currentIndex;
+            DispatchArgsBufferUAV.InterlockedAdd(0, 1, currentIndex);
+#endif
+            TriangleDataBufferUAV.Store3(currentIndex * 12, uint3(instanceData.xy, (instanceData.z & ~0xffffff) | materialID));
+        }
+    }
+}
+
+[numthreads(64, 1, 1)]
+void TriangleOcclusionPass(uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
+{
+    uint triangleID = gtid.x;
+	[branch] if (triangleID == 0)
+    {
+        uint instanceID = gid.x;
+        uint3 instanceData = TriangleDataBufferSRV.Load3(instanceID * 12);
+
+        MaterialIndexLDS = instanceData.z & 0xffffff;
+        InstanceDataLDS = instanceData;
+        TriangleCounterLDS = 0;
+    }
+
+    GroupMemoryBarrierWithGroupSync();
+
+#if defined(VMESH_DXC_FEATURES)
+	uint triCount = (InstanceDataLDS.z >> 24) / 3;
+	[branch] if (triangleID >= triCount)
+		return;
+	
+	uint3 indices = (uint3)0;
+	bool visible = false;
+#else
+    uint3 indices = (uint3)0;
+    bool visible = false;
+
+	// we can't early-out because of the group sync at the end
+    uint triCount = (InstanceDataLDS.z >> 24) / 3;
+	[branch] if (triangleID < triCount)
+#endif
+	{
+		// fetch triangle indices
+        uint packedIndices = TriangleBuffer.Load((triangleID + InstanceDataLDS.x) * 4);
+        indices = uint3(packedIndices, packedIndices >> 10, packedIndices >> 20) & 0x3ff;
+        indices = mad(indices, 2, InstanceDataLDS.y);
+
+		// fetch vertices
+        uint2 vdata;
+        half3 corners[3];
+        vdata = VertexPositionBuffer.Load2(indices.x * 4);
+        corners[0] = half3(f16tof32(vdata.x >> 16), f16tof32(vdata.x), f16tof32(vdata.y));
+        vdata = VertexPositionBuffer.Load2(indices.y * 4);
+        corners[1] = half3(f16tof32(vdata.x >> 16), f16tof32(vdata.x), f16tof32(vdata.y));
+        vdata = VertexPositionBuffer.Load2(indices.z * 4);
+        corners[2] = half3(f16tof32(vdata.x >> 16), f16tof32(vdata.x), f16tof32(vdata.y));
+
+		// frustum cull
+#if defined(VMESH_DXC_FEATURES)
+		[branch] if (FrustumCullTriangle(corners[0], corners[1], corners[2]))
+			return;
+#else
+		[branch] if (!FrustumCullTriangle(corners[0], corners[1], corners[2]))
+#endif
+		{
+			bool nearClip = false;
+
+			// project bounds to screen space
+			float4 screenCorners[3];
+			{
+				[unroll] for (int i = 0; i < 3; i++)
+				{
+					// to clip space
+                    screenCorners[i] = mul(UNITY_MATRIX_VP, float4(corners[i], 1.0));
+
+					// skip culling for triangles clipping the near plane
+					if (screenCorners[i].w == 0.0)
+					{
+						nearClip = true;
+						break;
+					}
+
+#if UNITY_UV_STARTS_AT_TOP
+					screenCorners[i].y = -screenCorners[i].y;
+#endif
+					// to ndc
+					screenCorners[i].xyz *= rcp(screenCorners[i].w);
+					// to raster space
+					screenCorners[i].xy = mad(screenCorners[i].xy, 0.5, 0.5);
+				}
+			}
+
+			[branch] if (nearClip)
+                visible = true;
+			else
+			{
+				// test backfacing triangles
+                visible = BackfaceVisibility(screenCorners[0].xyz, screenCorners[1].xyz, screenCorners[2].xyz);
+
+				float4 screenRect = float4(1.0, 1.0, 0.0, 0.0);
+				half closestDepth = 0.0;
+				[unroll] for (int i = 0; i < 3; i++)
+				{
+					screenRect.xy = min(screenRect.xy, screenCorners[i].xy);
+					screenRect.zw = max(screenRect.zw, screenCorners[i].xy);
+#if defined(UNITY_REVERSED_Z)
+					closestDepth = max(closestDepth, screenCorners[i].z);
+#else
+					closestDepth = min(closestDepth, screenCorners[i].z);
+#endif
+				}
+
+				// test small triangles
+                visible = visible && SmallTriangleVisibility(screenRect, _ScreenSize.xy);
+
+				// sample depth pyramid
+                uint level = ComputeSampleLevel(screenRect);
+                half cameraSampledDepth = SampleDepthPyramid(level, screenRect);
+
+#if defined(UNITY_REVERSED_Z)
+				visible = visible && cameraSampledDepth < mad(closestDepth, DepthTestOffset, closestDepth);
+#else
+                visible = visible && cameraSampledDepth > mad(closestDepth, -DepthTestOffset, closestDepth);
+#endif
+            }
+		}
+	}
+
+    uint triangleOffset = UINT_MAX;
+    [branch] if (visible)
+    {
+        uint triangleGlobalID = mad(triangleID, 3, InstanceDataLDS.x) / 3;
+        if (!ReadTriangleVisibility(triangleGlobalID))
+        {
+#if defined(VMESH_DXC_FEATURES)
+			uint localCount = WaveActiveSum(3);
+
+			uint offset;
+			if (WaveIsFirstLane())
+			{
+				DrawArgsBufferUAV.InterlockedAdd(MaterialIndexLDS * 20, localCount, offset);
+				offset += DrawArgsBufferUAV.Load(mad(MaterialIndexLDS, 20, 8));
+			}
+			offset = WaveReadLaneFirst(offset) + WavePrefixSum(3);
+
+            StoreCompactedIndices(offset, indices);
+#else
+            InterlockedAdd(TriangleCounterLDS, 3, triangleOffset);
+#endif
+        }
+        StoreTriangleVisibility(triangleGlobalID);
+    }
+	
+#if !defined(VMESH_DXC_FEATURES)
+    GroupMemoryBarrierWithGroupSync();
+
+	[branch] if (triangleID == 0)
+    {
+        DrawArgsBufferUAV.InterlockedAdd(MaterialIndexLDS * 20, TriangleCounterLDS, OffsetDataLDS);
+        OffsetDataLDS += DrawArgsBufferUAV.Load(mad(MaterialIndexLDS, 20, 8));
+    }
+
+    GroupMemoryBarrierWithGroupSync();
+
+	[branch] if (triangleOffset != UINT_MAX)
+        StoreCompactedIndices(OffsetDataLDS + triangleOffset, indices);
+#endif
+}
+
+[numthreads(64, 1, 1)]
+void TrianglePreparePass(uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
+{
+    uint triangleID = gtid.x;
+	[branch] if (triangleID == 0)
+    {
+        uint instanceID = gid.x;
+        uint3 instanceData = TriangleDataBufferSRV.Load3(instanceID * 12);
+
+        MaterialIndexLDS = instanceData.z & 0xffffff;
+        InstanceDataLDS = instanceData;
+        TriangleCounterLDS = 0;
+    }
+
+    GroupMemoryBarrierWithGroupSync();
+	
+#if defined(VMESH_DXC_FEATURES)
+	uint triCount = (InstanceDataLDS.z >> 24) / 3;
+	[branch] if (triangleID >= triCount)
+		return;
+
+	uint3 indices = (uint3)0;
+#else
+    uint3 indices = (uint3)0;
+    uint triangleOffset = UINT_MAX;
+
+	// we can't early-out because of the group sync at the end
+    uint triCount = (InstanceDataLDS.z >> 24) / 3;
+	[branch] if (triangleID < triCount)
+#endif
+    {
+        if (ReadTriangleVisibility(mad(triangleID, 3, InstanceDataLDS.x) / 3))
+        {
+			// fetch triangle indices
+            uint packedIndices = TriangleBuffer.Load((triangleID + InstanceDataLDS.x) * 4);
+            indices = uint3(packedIndices, packedIndices >> 10, packedIndices >> 20) & 0x3ff;
+            indices = mad(indices, 2, InstanceDataLDS.y);
+			
+#if defined(VMESH_DXC_FEATURES)
+			uint localCount = WaveActiveSum(3);
+
+			uint offset;
+			if (WaveIsFirstLane())
+			{
+				DrawArgsBufferUAV.InterlockedAdd(MaterialIndexLDS * 20, localCount, offset);
+				offset += DrawArgsBufferUAV.Load(mad(MaterialIndexLDS, 20, 8));
+			}
+			offset = WaveReadLaneFirst(offset) + WavePrefixSum(3);
+
+            StoreCompactedIndices(offset, indices);
+#else
+            InterlockedAdd(TriangleCounterLDS, 3, triangleOffset);
+#endif
+        }
+    }
+	
+#if !defined(VMESH_DXC_FEATURES)
+    GroupMemoryBarrierWithGroupSync();
+
+	[branch] if (triangleID == 0)
+    {
+        DrawArgsBufferUAV.InterlockedAdd(MaterialIndexLDS * 20, TriangleCounterLDS, OffsetDataLDS);
+        OffsetDataLDS += DrawArgsBufferUAV.Load(mad(MaterialIndexLDS, 20, 8));
+    }
+
+    GroupMemoryBarrierWithGroupSync();
+
+	[branch] if (triangleOffset != UINT_MAX)
+        StoreCompactedIndices(OffsetDataLDS + triangleOffset, indices);
+#endif
+}
+
+[numthreads(64, 1, 1)]
+void ShadowTriangleOcclusionPass(uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
+{
+    uint triangleID = gtid.x;
+	[branch] if (triangleID == 0)
+    {
+        uint instanceID = gid.x;
+        uint3 instanceData = ShadowTriangleDataBufferSRV.Load3(instanceID * 12);
+
+        InstanceDataLDS = instanceData;
+        TriangleCounterLDS = 0;
+    }
+
+    GroupMemoryBarrierWithGroupSync();
+
+#if defined(VMESH_DXC_FEATURES)
+	uint triCount = (InstanceDataLDS.z >> 24) / 3;
+	[branch] if (triangleID >= triCount)
+		return;
+
+	uint3 indices = (uint3)0;
+    bool visible = false;
+#else
+    uint3 indices = (uint3)0;
+    bool visible = false;
+
+	// we can't early-out because of the group sync at the end
+    uint triCount = (InstanceDataLDS.z >> 24) / 3;
+	[branch] if (triangleID < triCount)
+#endif
+	{
+		// fetch triangle indices
+        uint packedIndices = TriangleBuffer.Load((triangleID + InstanceDataLDS.x) * 4);
+        indices = uint3(packedIndices, packedIndices >> 10, packedIndices >> 20) & 0x3ff;
+        indices = mad(indices, 2, InstanceDataLDS.y);
+
+		// fetch vertices
+        uint2 vdata;
+        half3 corners[3];
+        vdata = VertexPositionBuffer.Load2(indices.x * 4);
+        corners[0] = half3(f16tof32(vdata.x >> 16), f16tof32(vdata.x), f16tof32(vdata.y));
+        vdata = VertexPositionBuffer.Load2(indices.y * 4);
+        corners[1] = half3(f16tof32(vdata.x >> 16), f16tof32(vdata.x), f16tof32(vdata.y));
+        vdata = VertexPositionBuffer.Load2(indices.z * 4);
+        corners[2] = half3(f16tof32(vdata.x >> 16), f16tof32(vdata.x), f16tof32(vdata.y));
+
+		bool outOfFrustum = true;
+		
+		// project bounds to screen space
+        float3 screenCorners[3];
+        [branch] if (CheckCascadeCullingIndex(corners[0]) || CheckCascadeCullingIndex(corners[1]) || CheckCascadeCullingIndex(corners[2]))
+        {
+			[unroll] for (int i = 0; i < 3; i++)
+                outOfFrustum = outOfFrustum && ProjectTriangleToShadowCascade(corners[i], screenCorners[i]);
+        }
+
+#if defined(VMESH_DXC_FEATURES)
+		[branch] if (outOfFrustum)
+			return;
+#else
+		[branch] if (!outOfFrustum)
+#endif
+		{
+			// test backfacing triangles
+            visible = BackfaceVisibility(screenCorners[0].xyz, screenCorners[1].xyz, screenCorners[2].xyz);
+
+			float4 screenRect = float4(1.0, 1.0, 0.0, 0.0);
+			[unroll] for (int i = 0; i < 3; i++)
+			{
+				screenRect.xy = min(screenRect.xy, screenCorners[i].xy);
+				screenRect.zw = max(screenRect.zw, screenCorners[i].xy);
+			}
+
+			// test small triangles
+            visible = visible && SmallTriangleVisibility(screenRect, _MainLightShadowmapSize.zw);
+        }
+	}
+    
+    uint triangleOffset = UINT_MAX;
+    [branch] if (visible)
+    {
+#if defined(VMESH_DXC_FEATURES)
+		uint localCount = WaveActiveSum(3);
+
+		uint offset;
+		if (WaveIsFirstLane())
+        {
+#if defined(VMESH_SHADOW_CASCADE_0)
+	        ShadowDrawArgsBufferUAV.InterlockedAdd(0, localCount, offset);
+#elif defined(VMESH_SHADOW_CASCADE_1)
+	        ShadowDrawArgsBufferUAV.InterlockedAdd(20, localCount, offset);
+#elif defined(VMESH_SHADOW_CASCADE_2)
+	        ShadowDrawArgsBufferUAV.InterlockedAdd(40, localCount, offset);
+#elif defined(VMESH_SHADOW_CASCADE_3)
+	        ShadowDrawArgsBufferUAV.InterlockedAdd(60, localCount, offset);
+#endif
+        }
+		offset = WaveReadLaneFirst(offset) + WavePrefixSum(3);
+
+#if defined(VMESH_SHADOW_CASCADE_0)
+	    StoreCompactedIndices(mad(IndexValuePageStride, LoadableMemoryPageCount, offset), indices);
+#elif defined(VMESH_SHADOW_CASCADE_1)
+	    StoreCompactedIndices(mad(2 * IndexValuePageStride, LoadableMemoryPageCount, offset), indices);
+#elif defined(VMESH_SHADOW_CASCADE_2)
+	    StoreCompactedIndices(mad(3 * IndexValuePageStride, LoadableMemoryPageCount, offset), indices);
+#elif defined(VMESH_SHADOW_CASCADE_3)
+	    StoreCompactedIndices(mad(4 * IndexValuePageStride, LoadableMemoryPageCount, offset), indices);
+#endif
+#else
+        InterlockedAdd(TriangleCounterLDS, 3, triangleOffset);
+#endif
+    }
+
+#if !defined(VMESH_DXC_FEATURES)
+	GroupMemoryBarrierWithGroupSync();
+
+	[branch] if (triangleID == 0)
+    {
+#if defined(VMESH_SHADOW_CASCADE_0)
+	    ShadowDrawArgsBufferUAV.InterlockedAdd(0, TriangleCounterLDS, OffsetDataLDS);
+#elif defined(VMESH_SHADOW_CASCADE_1)
+	    ShadowDrawArgsBufferUAV.InterlockedAdd(20, TriangleCounterLDS, OffsetDataLDS);
+#elif defined(VMESH_SHADOW_CASCADE_2)
+	    ShadowDrawArgsBufferUAV.InterlockedAdd(40, TriangleCounterLDS, OffsetDataLDS);
+#elif defined(VMESH_SHADOW_CASCADE_3)
+	    ShadowDrawArgsBufferUAV.InterlockedAdd(60, TriangleCounterLDS, OffsetDataLDS);
+#endif
+    }
+
+	GroupMemoryBarrierWithGroupSync();
+
+	[branch] if (triangleOffset != UINT_MAX)
+    {
+#if defined(VMESH_SHADOW_CASCADE_0)
+	    StoreCompactedIndices(mad(IndexValuePageStride, LoadableMemoryPageCount, OffsetDataLDS + triangleOffset), indices);
+#elif defined(VMESH_SHADOW_CASCADE_1)
+	    StoreCompactedIndices(mad(2 * IndexValuePageStride, LoadableMemoryPageCount, OffsetDataLDS + triangleOffset), indices);
+#elif defined(VMESH_SHADOW_CASCADE_2)
+	    StoreCompactedIndices(mad(3 * IndexValuePageStride, LoadableMemoryPageCount, OffsetDataLDS + triangleOffset), indices);
+#elif defined(VMESH_SHADOW_CASCADE_3)
+	    StoreCompactedIndices(mad(4 * IndexValuePageStride, LoadableMemoryPageCount, OffsetDataLDS + triangleOffset), indices);
+#endif
+    }
+#endif
+}
+
+[numthreads(MaxMaterialCount, 1, 1)]
+void OffsetScanPass(uint3 dtid : SV_DispatchThreadID)
+{
+    uint id = dtid.x;
+	[branch] if (id == 0)
+        IndexCounterLDS = 0;
+
+    GroupMemoryBarrierWithGroupSync();
+
+	[branch] if (id >= MaterialCount)
+        return;
+
+    uint indexCount = DrawArgsBufferUAV.Load(mad(id, 20, 8));
+	
+#if defined(VMESH_DXC_FEATURES)
+	uint localCount = WaveActiveSum(indexCount);
+
+	uint offset;
+	if (WaveIsFirstLane())
+		InterlockedAdd(IndexCounterLDS, localCount, offset);
+	uint currentIndexOffset = WaveReadLaneFirst(offset) + WavePrefixSum(indexCount);
+#else
+    uint currentIndexOffset;
+    InterlockedAdd(IndexCounterLDS, indexCount, currentIndexOffset);
+#endif
+	
+    DrawArgsBufferUAV.Store(id * 20, 0);
+    DrawArgsBufferUAV.Store(mad(id, 20, 8), currentIndexOffset);
+}
+
+[numthreads(MaxMaterialCount, 1, 1)]
+void InitArgumentPass(uint3 dtid : SV_DispatchThreadID)
+{
+    uint id = dtid.x;
+	[branch] if (id >= MaterialCount)
+        return;
+
+	[branch] if (dtid.x == 0)
+    {
+        DispatchArgsBufferUAV.Store(0, 0);
+        DispatchArgsBufferUAV.Store(12, 0);
+        
+        ShadowDrawArgsBufferUAV.Store(0, 0);
+        ShadowDrawArgsBufferUAV.Store(20, 0);
+        ShadowDrawArgsBufferUAV.Store(40, 0);
+        ShadowDrawArgsBufferUAV.Store(60, 0);
+    }
+
+    DrawArgsBufferUAV.Store(id * 20, 0);
+    DrawArgsBufferUAV.Store(mad(id, 20, 8), 0);
+}
+
+[numthreads(MaxMaterialCount, 1, 1)]
+void ResetArgumentPass(uint3 dtid : SV_DispatchThreadID)
+{
+    uint id = dtid.x;
+	[branch] if (id >= MaterialCount)
+        return;
+	
+    DrawArgsBufferUAV.Store(id * 20, 0);
+}
+
+[numthreads(128, 1, 1)]
+void ResetFlagPass(uint3 dtid : SV_DispatchThreadID)
+{
+    uint id = DispatchPassOffset + dtid.x;
+	[branch] if (id >= VisibilityFlagVectorCount)
+        return;
+
+    TriangleVisibilityBufferUAV.Store4(id * 16, (uint4)0);
+}
