@@ -1,0 +1,31 @@
+#pragma kernel CopyPass
+#pragma kernel UpdateStatusPass
+
+uint CopySourceStart;
+uint CopyDestStart;
+uint CopyLength;
+
+uint PageID;
+uint SlotID;
+
+ByteAddressBuffer CopySourceSRV;
+RWByteAddressBuffer CopyDestUAV;
+RWByteAddressBuffer StatusBufferUAV;
+
+[numthreads(64, 1, 1)]
+void CopyPass(uint3 dtid : SV_DispatchThreadID)
+{
+	uint id = dtid.x;
+
+	if (id * 4 >= CopyLength)
+		return;
+
+	uint4 value = CopySourceSRV.Load4(mad(id, 4, CopySourceStart) * 4);
+	CopyDestUAV.Store4(mad(id, 4, CopyDestStart) * 4, value);
+}
+
+[numthreads(1, 1, 1)]
+void UpdateStatusPass(uint3 dtid : SV_DispatchThreadID)
+{
+	StatusBufferUAV.Store(SlotID * 4, PageID);
+}
