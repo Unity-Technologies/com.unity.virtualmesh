@@ -15,7 +15,7 @@ Shader "VirtualMesh/CustomPasses"
             ZWrite On
             ZTest LEqual
             ColorMask 0
-            //Cull Off
+            Cull Front
 
             HLSLPROGRAM
             #pragma target 2.0

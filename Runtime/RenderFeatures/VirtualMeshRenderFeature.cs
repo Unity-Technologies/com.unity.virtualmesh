@@ -128,15 +128,12 @@ namespace Unity.VirtualMesh.Runtime
             ConfigureClear(ClearFlag.None, Color.black);
         }
 
-        static void ExecutePass(PassData data, UnsafeGraphContext context)
+        static void ExecutePass(PassData data, RasterGraphContext context)
         {
-            var cmd = CommandBufferHelpers.GetNativeCommandBuffer(context.cmd);
+            var cmd = context.cmd;
             using (new ProfilingScope(cmd, data.profilingSampler))
             {
                 cmd.SetGlobalDepthBias(1.0f, 2.5f);
-
-                // set render target
-                cmd.SetRenderTarget(data.shadowTexture);
 
                 // _MainLightShadowmapSize is needed but only set when soft shadows are enabled
                 if (!data.shadowData.supportsSoftShadows)
@@ -154,7 +151,9 @@ namespace Unity.VirtualMesh.Runtime
 
                     // set viewport
                     cmd.SetViewport(new Rect(data.cascadeSlices[cascadeIndex].offsetX, data.cascadeSlices[cascadeIndex].offsetY, data.cascadeSlices[cascadeIndex].resolution, data.cascadeSlices[cascadeIndex].resolution));
-                    cmd.SetViewProjectionMatrices(data.cascadeSlices[cascadeIndex].viewMatrix, data.cascadeSlices[cascadeIndex].projectionMatrix);
+                    var proj = data.cascadeSlices[cascadeIndex].projectionMatrix;
+                    proj.m11 = -proj.m11;
+                    cmd.SetViewProjectionMatrices(data.cascadeSlices[cascadeIndex].viewMatrix, proj);
 
                     // draw vmesh geometry
                     data.settings.customPassMaterial.SetBuffer(VirtualMeshShaderProperties.VertexPositionBuffer, VirtualMeshManager.Instance.VertexPositionBuffer);
@@ -186,7 +185,7 @@ namespace Unity.VirtualMesh.Runtime
                 return;
 
             var lightIndex = lightData.mainLightIndex;
-            if (lightIndex == -1 || !renderingData.cullResults.GetShadowCasterBounds(lightIndex, out Bounds bounds))
+            if (lightIndex == -1 || !renderingData.cullResults.GetShadowCasterBounds(lightIndex, out _))
                 return;
 
             var shadowLight = lightData.visibleLights[lightIndex];
@@ -199,14 +198,13 @@ namespace Unity.VirtualMesh.Runtime
             for (int cascadeIndex = 0; cascadeIndex < cascadeCount; cascadeIndex++)
             {
                 // get matrix and slice data
-                Vector4 cascadeSplitDistance;
                 ShadowUtils.ExtractDirectionalLightMatrix(ref renderingData.cullResults, shadowData, lightIndex, cascadeIndex,
                     shadowTextureWidth, (cascadeCount == 2) ? shadowTextureHeight >> 1 : shadowTextureHeight,
                     shadowResolution, shadowLight.light.shadowNearPlane,
-                    out cascadeSplitDistance, out m_CascadeSlices[cascadeIndex]);
+                    out _, out m_CascadeSlices[cascadeIndex]);
             }
 
-            using (var builder = renderGraph.AddUnsafePass<PassData>(m_ProfilerTag, out var passData))
+            using (var builder = renderGraph.AddRasterRenderPass<PassData>(m_ProfilerTag, out var passData))
             {
                 passData.settings = settings;
                 passData.profilingSampler = m_ProfilingSampler;
@@ -216,14 +214,12 @@ namespace Unity.VirtualMesh.Runtime
                 passData.shadowTexture = resourceData.mainShadowsTexture;
                 passData.cascadeSlices = m_CascadeSlices;
 
-                //builder.UseGlobalTexture(Shader.PropertyToID("_MainLightShadowmapTexture"), AccessFlags.Write);
-                builder.UseTexture(passData.shadowTexture, AccessFlags.Write);
-                //builder.SetRenderAttachmentDepth(passData.shadowTexture, AccessFlags.Write);
+                builder.SetRenderAttachmentDepth(passData.shadowTexture, AccessFlags.Write);
 
                 builder.AllowPassCulling(false);
                 builder.AllowGlobalStateModification(true);
 
-                builder.SetRenderFunc((PassData data, UnsafeGraphContext context) => ExecutePass(data, context));
+                builder.SetRenderFunc((PassData data, RasterGraphContext context) => ExecutePass(data, context));
             }
         }
     }
