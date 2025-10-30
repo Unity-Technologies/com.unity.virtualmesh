@@ -36,7 +36,7 @@ public static partial class BetterStreamingAssets
 
     public static void Initialize()
     {
-        BetterStreamingAssetsImp.Initialize(Application.dataPath, Application.streamingAssetsPath);
+        BetterStreamingAssetsImp.Initialize();
     }
 
     /// <summary>
@@ -44,20 +44,6 @@ public static partial class BetterStreamingAssets
     /// or it returns false, a warning will be logged.
     /// </summary>
     public static event Func<string, bool> CompressedStreamingAssetFound;
-
-#if UNITY_EDITOR
-    public static void InitializeWithExternalApk(string apkPath)
-    {
-        BetterStreamingAssetsImp.ApkMode = true;
-        BetterStreamingAssetsImp.Initialize(apkPath, "jar:file://" + apkPath + "!/assets/");
-    }
-
-    public static void InitializeWithExternalDirectories(string dataPath, string streamingAssetsPath)
-    {
-        BetterStreamingAssetsImp.ApkMode = false;
-        BetterStreamingAssetsImp.Initialize(dataPath, streamingAssetsPath);
-    }
-#endif
 
     public static bool FileExists(string path)
     {
@@ -181,15 +167,15 @@ public static partial class BetterStreamingAssets
             get { return ApkMode ? ApkImpl.s_root : LooseFilesImpl.s_root; }
         }
 
-        internal static void Initialize(string dataPath, string streamingAssetsPath)
+        internal static void Initialize()
         {
             if ( ApkMode )
             {
-                ApkImpl.Initialize(dataPath, streamingAssetsPath);
+                ApkImpl.Initialize();
             }
             else
             {
-                LooseFilesImpl.Initialize(dataPath, streamingAssetsPath);
+                LooseFilesImpl.Initialize();
             }
         }
 
@@ -241,45 +227,14 @@ public static partial class BetterStreamingAssets
         public static string s_root;
         private static string[] s_emptyArray = new string[0];
 
-        public static void Initialize(string dataPath, string streamingAssetsPath)
+        public static void Initialize()
         {
-            s_root = Path.GetFullPath(streamingAssetsPath).Replace('\\', '/').TrimEnd('/');
+            s_root = Path.GetFullPath(Application.streamingAssetsPath).Replace('\\', '/').TrimEnd('/');
         }
 
         public static string[] GetFiles(string path, string searchPattern, SearchOption searchOption)
         {
-            if (!Directory.Exists(s_root))
-                return s_emptyArray;
-
-            // this will throw if something is fishy
-            path = PathUtil.NormalizeRelativePath(path, forceTrailingSlash : true);
-
-            Debug.Assert(s_root.Last() != '\\' && s_root.Last() != '/' && path.StartsWith("/"));
-
-            var files = Directory.GetFiles(s_root + path, searchPattern ?? "*", searchOption);
-
-            for ( int i = 0; i < files.Length; ++i )
-            {
-                Debug.Assert(files[i].StartsWith(s_root));
-                files[i] = files[i].Substring(s_root.Length + 1).Replace('\\', '/');
-            }
-
-#if UNITY_EDITOR
-            // purge meta files
-            {
-                int j = 0;
-                for ( int i = 0; i < files.Length; ++i )
-                {
-                    if ( !files[i].EndsWith(".meta") )
-                    {
-                        files[j++] = files[i];
-                    }
-                }
-                Array.Resize(ref files, j);
-            }
-
-#endif
-            return files;
+            throw new NotImplementedException();
         }
 
         public static bool TryGetInfo(string path, out ReadInfo info)
@@ -346,14 +301,15 @@ public static partial class BetterStreamingAssets
             public uint crc32;
         }
 
-        public static void Initialize(string dataPath, string streamingAssetsPath)
+        public static void Initialize()
         {
+            string dataPath = Application.dataPath;
             s_root = dataPath;
 
             List<string> paths = new List<string>();
             List<PartInfo> parts = new List<PartInfo>();
 
-            GetStreamingAssetsInfoFromJar(s_root, paths, parts);
+            GetStreamingAssetsInfoFromJar(paths, parts);
 
             if (paths.Count == 0 && !Application.isEditor && Path.GetFileName(dataPath) != "base.apk")
             {
@@ -362,7 +318,7 @@ public static partial class BetterStreamingAssets
                 if (File.Exists(newDataPath))
                 {
                     s_root = newDataPath;
-                    GetStreamingAssetsInfoFromJar(newDataPath, paths, parts);
+                    GetStreamingAssetsInfoFromJar(paths, parts);
                 }
             }
 
@@ -396,66 +352,7 @@ public static partial class BetterStreamingAssets
 
         public static string[] GetFiles(string path, string searchPattern, SearchOption searchOption)
         {
-            if ( path == null )
-                throw new ArgumentNullException("path");
-
-            var actualDirPath = PathUtil.NormalizeRelativePath(path, forceTrailingSlash : true);
-
-            // find first file there
-            var index = GetDirectoryIndex(actualDirPath);
-            if ( index < 0 )
-                throw new IOException();
-            if ( index == s_paths.Length )
-                throw new DirectoryNotFoundException();
-
-            Predicate<string> filter;
-            if ( string.IsNullOrEmpty(searchPattern) || searchPattern == "*" )
-            {
-                filter = null;
-            }
-            else if ( searchPattern.IndexOf('*') >= 0 || searchPattern.IndexOf('?') >= 0 )
-            {
-                var regex = PathUtil.WildcardToRegex(searchPattern);
-                filter = (x) => regex.IsMatch(x);
-            }
-            else
-            {
-                filter = (x) => string.Compare(x, searchPattern, true) == 0;
-            }
-
-            List<string> results = new List<string>();
-
-            for ( int i = index; i < s_paths.Length; ++i )
-            {
-                var filePath = s_paths[i];
-
-                if ( !filePath.StartsWith(actualDirPath) )
-                    break;
-
-                string fileName;
-
-                var dirSeparatorIndex = filePath.LastIndexOf('/', filePath.Length - 1, filePath.Length - actualDirPath.Length);
-                if ( dirSeparatorIndex >= 0 )
-                {
-                    if ( searchOption == SearchOption.TopDirectoryOnly )
-                        continue;
-
-                    fileName = filePath.Substring(dirSeparatorIndex + 1);
-                }
-                else
-                {
-                    fileName = filePath.Substring(actualDirPath.Length);
-                }
-
-                // now do a match
-                if ( filter == null || filter(fileName) )
-                {
-                    Debug.Assert(filePath[0] == '/');
-                    results.Add(filePath.Substring(1));
-                }
-            }
-
-            return results.ToArray();
+            throw new NotImplementedException();
         }
 
         public static byte[] ReadAllBytes(string path)
@@ -540,9 +437,9 @@ public static partial class BetterStreamingAssets
             return s_paths.Length;
         }
 
-        private static void GetStreamingAssetsInfoFromJar(string apkPath, List<string> paths, List<PartInfo> parts)
+        private static void GetStreamingAssetsInfoFromJar(List<string> paths, List<PartInfo> parts)
         {
-            using ( var stream = File.OpenRead(apkPath) )
+            using ( var stream = File.OpenRead(s_root) )
             using ( var reader = new BinaryReader(stream) )
             {
                 if ( !stream.CanRead )

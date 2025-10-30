@@ -261,7 +261,6 @@ namespace Unity.VirtualMesh.Runtime
                 // generate file path
                 string name = (pageID + 1).ToString("X8");
                 string assetPath = $"{ResourcePathDefinitions.virtualMeshDataPath}/{name}.vmeshdata";
-
                 using (var stream = BetterStreamingAssets.OpenRead(assetPath))
                 {
                     stream.Seek(0, SeekOrigin.Begin);
@@ -852,7 +851,7 @@ namespace Unity.VirtualMesh.Runtime
                 return false;
 
             // load materials
-            m_MaterialAssetBundle = BetterStreamingAssets.LoadAssetBundle(ResourcePathDefinitions.materialBundleFullPath);
+            m_MaterialAssetBundle = AssetBundle.LoadFromFile($"{Application.streamingAssetsPath}/{ResourcePathDefinitions.materialBundleFullPath}");
             if (m_MaterialAssetBundle == null)
             {
                 m_Materials = Array.Empty<Material>();
@@ -897,7 +896,7 @@ namespace Unity.VirtualMesh.Runtime
                 return false;
 
             // load placeholders
-            m_PlaceholderAssetBundle = BetterStreamingAssets.LoadAssetBundle(ResourcePathDefinitions.placeholderBundleFullPath);
+            m_PlaceholderAssetBundle = AssetBundle.LoadFromFile($"{Application.streamingAssetsPath}/{ResourcePathDefinitions.placeholderBundleFullPath}");
             if (m_PlaceholderAssetBundle == null)
             {
                 m_Placeholders = Array.Empty<Mesh>();
