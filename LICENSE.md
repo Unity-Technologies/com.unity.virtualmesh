@@ -2,7 +2,7 @@ com.unity.virtualmesh © 2025 Unity Technologies
 
 
 
-Licensed under the Unity Companion License for Unity-dependent projects (see unity.com/legal/licenses/unity-companion-license). 
+Licensed under the Unity Companion License for Unity-dependent projects (see [unity.com/legal/licenses/unity-companion-license](https://unity.com/legal/licenses/unity-companion-license)).
 
 
 
