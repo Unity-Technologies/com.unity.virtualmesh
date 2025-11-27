@@ -43,8 +43,7 @@ namespace Unity.VirtualMesh.Editor
         private void BakeShaders()
         {
             var filters = new List<MeshFilter>();
-            VirtualMeshBakerAPI.GetFilterList(m_RootObject, filters, m_BakeInactiveObjects);
-            if (filters.Count > 0)
+            if (VirtualMeshBakerAPI.GetFilterList(m_RootObject, filters, m_BakeInactiveObjects))
             {
                 VirtualMeshBakerAPI.EnsureCacheAndSaveDirectories();
                 VirtualMeshBakerAPI.ConvertShaders(filters, m_BakeOpaqueObjectsOnly);
@@ -60,8 +59,7 @@ namespace Unity.VirtualMesh.Editor
         private void BakeMeshes()
         {
             var filters = new List<MeshFilter>();
-            VirtualMeshBakerAPI.GetFilterList(m_RootObject, filters, m_BakeInactiveObjects);
-            if (filters.Count > 0)
+            if (VirtualMeshBakerAPI.GetFilterList(m_RootObject, filters, m_BakeInactiveObjects))
             {
                 VirtualMeshBakerAPI.EnsureCacheAndSaveDirectories();
                 VirtualMeshBakerAPI.ConvertMeshes(filters, m_BakeOpaqueObjectsOnly, m_SimplificationTargetError);
@@ -77,12 +75,11 @@ namespace Unity.VirtualMesh.Editor
         private void FullBake()
         {
             var filters = new List<MeshFilter>();
-            VirtualMeshBakerAPI.GetFilterList(m_RootObject, filters, m_BakeInactiveObjects);
-            if (filters.Count > 0)
+            if (VirtualMeshBakerAPI.GetFilterList(m_RootObject, filters, m_BakeInactiveObjects))
             {
                 VirtualMeshBakerAPI.EnsureCacheAndSaveDirectories(true);
-                VirtualMeshBakerAPI.ConvertShaders(filters, m_BakeOpaqueObjectsOnly);
-                VirtualMeshBakerAPI.ConvertMeshes(filters, m_BakeOpaqueObjectsOnly, m_SimplificationTargetError);
+                if (VirtualMeshBakerAPI.ConvertShaders(filters, m_BakeOpaqueObjectsOnly))
+                    VirtualMeshBakerAPI.ConvertMeshes(filters, m_BakeOpaqueObjectsOnly, m_SimplificationTargetError);
 
                 AssetDatabase.Refresh();
             }
