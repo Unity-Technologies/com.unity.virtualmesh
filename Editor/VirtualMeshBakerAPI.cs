@@ -165,7 +165,8 @@ namespace Unity.VirtualMesh.Editor
         /// Converts shaders into versions that contain vertex shaders that the virtual mesh system supports.
         /// </summary>
         /// <param name="meshFilters">List of MeshFilters to bake.</param>
-        public static void ConvertShaders(List<MeshFilter> meshFilters)
+        /// <param name="bakeOpaqueObjectsOnly">Flag to indicate if only objects with opaque render queues should be baked.</param>
+        public static void ConvertShaders(List<MeshFilter> meshFilters, bool bakeOpaqueObjectsOnly)
         {
             if (meshFilters.Count == 0)
                 return;
@@ -189,7 +190,7 @@ namespace Unity.VirtualMesh.Editor
                     if (desc.topology != MeshTopology.Triangles)
                         continue;
 
-                    if (!CheckSupportedShader(material.shader))
+                    if (!CheckSupportedShader(material.shader, bakeOpaqueObjectsOnly))
                         continue;
 
                     int materialIndex = materials.FindIndex(x => material.GetInstanceID().Equals(x.GetInstanceID()));
@@ -276,7 +277,9 @@ namespace Unity.VirtualMesh.Editor
         /// This also outputs asset bundles containing placeholder meshes and materials.
         /// </summary>
         /// <param name="meshFilters">List of MeshFilters to bake.</param>
-        public static void ConvertMeshes(List<MeshFilter> meshFilters)
+        /// <param name="bakeOpaqueObjectsOnly">Flag to indicate if only objects with opaque render queues should be baked.</param>
+        /// <param name="simplificationTargetError">Flag to indicate if only objects with opaque render queues should be baked.</param>
+        public static void ConvertMeshes(List<MeshFilter> meshFilters, bool bakeOpaqueObjectsOnly, float simplificationTargetError)
         {
             var materials = new List<Material>();
             var materialData = new List<MaterialData>();
@@ -371,7 +374,7 @@ namespace Unity.VirtualMesh.Editor
                     if (desc.topology != MeshTopology.Triangles)
                         continue;
 
-                    if (!CheckSupportedShader(material.shader))
+                    if (!CheckSupportedShader(material.shader, bakeOpaqueObjectsOnly))
                         continue;
 
                     // identify material
@@ -582,10 +585,9 @@ namespace Unity.VirtualMesh.Editor
                             {
                                 // simplify children clusters
                                 uint targetIndexCount = (uint)(lodIndices.Count * 0.5f);
-                                float targetError = 0.01f;
                                 float[] resultError = new float[1];
                                 var lodIndicesArray = lodIndices.ToArray();
-                                uint lodIndexCount = MeshOperations.Simplify(lodIndicesArray, verticesLOD0, bakingVertexByteSize, targetIndexCount, targetError, 0x1, resultError);
+                                uint lodIndexCount = MeshOperations.Simplify(lodIndicesArray, verticesLOD0, bakingVertexByteSize, targetIndexCount, simplificationTargetError, 0x1, resultError);
 
                                 // early stop based on simlyfication fail
                                 bool reachedSimplifyLimit = lodIndexCount == lodIndicesArray.Length;
@@ -931,7 +933,8 @@ namespace Unity.VirtualMesh.Editor
         /// <summary>
         /// Checks if the specified shader is supported by the virtual mesh system for rendering.
         /// </summary>
-        private static bool CheckSupportedShader(Shader shader)
+        /// <param name="supportOpaqueOnly">Flag to indicate if only objects with opaque render queues should be supported.</param>
+        private static bool CheckSupportedShader(Shader shader, bool supportOpaqueOnly)
         {
             var shaderPath = AssetDatabase.GetAssetPath(shader);
             bool supportedType =
@@ -939,7 +942,7 @@ namespace Unity.VirtualMesh.Editor
                 shader.name.Equals("Universal Render Pipeline/Lit");
 
             var renderQueue = shader.renderQueue;
-            bool supportedQueue = renderQueue >= (int)RenderQueue.Geometry && renderQueue <= (int)RenderQueue.GeometryLast;
+            bool supportedQueue = !supportOpaqueOnly || (renderQueue >= (int)RenderQueue.Geometry && renderQueue <= (int)RenderQueue.GeometryLast);
 
             return supportedType && supportedQueue;
         }

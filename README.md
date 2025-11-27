@@ -69,8 +69,9 @@ Meshes that should be baked should be present in the scene as GameObjects, and c
 
 1. Open the *Virtual Mesh Baker* window by selecting `Virtual Mesh` > `Open Baker` from the editor tabs.
 2. Drag and drop your parent object into the `Root Game Object` field.
-3. Check the `Bake Inactive Objects` checkbox if inactive GameObjects should be considered during baking
-4. Click on the `Full Bake` button and wait until the process completes
+3. Check the `Bake Inactive Objects` checkbox if inactive GameObjects should be considered during baking.
+4. Uncheck the `Bake Opaque Objects Only` checkbox if objects with render queue settings other than opaque should be baked.
+5. Click on the `Full Bake` button and wait until the process completes.
 
 When the baking completes, the console should display a message with some statistics about the number of objects that have been processed. There should also be two new folders in your project:
 

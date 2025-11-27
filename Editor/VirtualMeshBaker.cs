@@ -13,6 +13,8 @@ namespace Unity.VirtualMesh.Editor
     {
         private GameObject m_RootObject = null;
         private bool m_BakeInactiveObjects = false;
+        private bool m_BakeOpaqueObjectsOnly = true;
+        private float m_SimplificationTargetError = 0.005f;
 
         /// <summary>
         /// Sets up or processes the scene before baking if needed.
@@ -45,7 +47,7 @@ namespace Unity.VirtualMesh.Editor
             if (filters.Count > 0)
             {
                 VirtualMeshBakerAPI.EnsureCacheAndSaveDirectories();
-                VirtualMeshBakerAPI.ConvertShaders(filters);
+                VirtualMeshBakerAPI.ConvertShaders(filters, m_BakeOpaqueObjectsOnly);
 
                 AssetDatabase.Refresh();
             }
@@ -62,7 +64,7 @@ namespace Unity.VirtualMesh.Editor
             if (filters.Count > 0)
             {
                 VirtualMeshBakerAPI.EnsureCacheAndSaveDirectories();
-                VirtualMeshBakerAPI.ConvertMeshes(filters);
+                VirtualMeshBakerAPI.ConvertMeshes(filters, m_BakeOpaqueObjectsOnly, m_SimplificationTargetError);
 
                 AssetDatabase.Refresh();
             }
@@ -79,8 +81,8 @@ namespace Unity.VirtualMesh.Editor
             if (filters.Count > 0)
             {
                 VirtualMeshBakerAPI.EnsureCacheAndSaveDirectories(true);
-                VirtualMeshBakerAPI.ConvertShaders(filters);
-                VirtualMeshBakerAPI.ConvertMeshes(filters);
+                VirtualMeshBakerAPI.ConvertShaders(filters, m_BakeOpaqueObjectsOnly);
+                VirtualMeshBakerAPI.ConvertMeshes(filters, m_BakeOpaqueObjectsOnly, m_SimplificationTargetError);
 
                 AssetDatabase.Refresh();
             }
@@ -89,11 +91,14 @@ namespace Unity.VirtualMesh.Editor
         public void CreateGUI()
         {
             VisualElement root = rootVisualElement;
-
-            var label = new Label("VMESH Baker v1.0");
-            root.Add(label);
+            root.style.paddingTop = 10;
+            root.style.paddingBottom = 10;
+            root.style.paddingLeft = 10;
+            root.style.paddingRight = 10;
 
             var rootObjectField = new ObjectField("Root Object");
+            rootObjectField.tooltip = "Sets the root object that contains all meshes to bake as children.";
+            rootObjectField.labelElement.style.width = 300;
             rootObjectField.allowSceneObjects = true;
             rootObjectField.objectType = typeof(GameObject);
             rootObjectField.RegisterValueChangedCallback(
@@ -102,13 +107,36 @@ namespace Unity.VirtualMesh.Editor
                 });
             root.Add(rootObjectField);
 
-            var bakeInactiveObjectsToggle = new Toggle();
-            bakeInactiveObjectsToggle.label = "Bake Inactive Objects";
+            var bakeInactiveObjectsToggle = new Toggle("Bake Inactive Objects");
+            bakeInactiveObjectsToggle.tooltip = "Determines if inactive objects should be baked or not.";
+            bakeInactiveObjectsToggle.labelElement.style.width = 300;
+            bakeInactiveObjectsToggle.value = false;
             bakeInactiveObjectsToggle.RegisterValueChangedCallback(
                 evt => {
                     m_BakeInactiveObjects = bakeInactiveObjectsToggle.value;
                 });
             root.Add(bakeInactiveObjectsToggle);
+
+            var bakeOnlyOpaqueToggle = new Toggle("Bake Opaque Objects Only");
+            bakeOnlyOpaqueToggle.tooltip = "Determines if only objects with opaque queue shaders should be baked or not (transparent object baking is not recommended).";
+            bakeOnlyOpaqueToggle.labelElement.style.width = 300;
+            bakeOnlyOpaqueToggle.value = true;
+            bakeOnlyOpaqueToggle.RegisterValueChangedCallback(
+                evt => {
+                    m_BakeOpaqueObjectsOnly = bakeOnlyOpaqueToggle.value;
+                });
+            root.Add(bakeOnlyOpaqueToggle);
+
+            var simplificationErrorTargetSlider = new Slider("Cluster Simplification Target Error", 0.001f, 1.0f);
+            simplificationErrorTargetSlider.tooltip = "Sets the simplification error target between each cluster LOD level. A lower value results in smoother transitions between parent and children clusters but is less efficient at reducing triangles.";
+            simplificationErrorTargetSlider.labelElement.style.width = 300;
+            simplificationErrorTargetSlider.value = 0.005f;
+            simplificationErrorTargetSlider.showInputField = true;
+            simplificationErrorTargetSlider.RegisterValueChangedCallback(
+                evt => {
+                    m_SimplificationTargetError = simplificationErrorTargetSlider.value;
+                });
+            root.Add(simplificationErrorTargetSlider);
 
             var convertShadersButton = new Button(BakeShaders);
             convertShadersButton.text = "Bake Shaders Only";
