@@ -66,11 +66,11 @@ Varyings BuildVirtualMeshVaryings(uint vertexID, uint instanceID)
 #endif
 
 #if defined(VARYINGS_NEED_TEXCOORD0) || defined(VARYINGS_DS_NEED_TEXCOORD0)
-    output.texCoord0 = uv0;
+    output.texCoord0 = float4(uv0.xy, 0.0, 0.0);
 #endif
 
 #if defined(VARYINGS_NEED_TEXCOORD1) || defined(VARYINGS_DS_NEED_TEXCOORD1)
-    output.texCoord1 = uv1;
+    output.texCoord1 = float4(uv1.xy, 0.0, 0.0);
 #endif
 
 #ifdef VARYINGS_NEED_SCREENPOSITION
