@@ -59,13 +59,23 @@ namespace Unity.VirtualMesh.Editor
         /// <param name="root">Root GameObject that contains all geometry to consider for baking under its hierarchy.</param>
         /// <param name="list">List of MeshFilters that should be used for baking.</param>
         /// <param name="bakeInactiveObjects">Flag to consider inactive GameObjects when filling the output list.</param>
-        public static void GetFilterList(GameObject root, List<MeshFilter> list, bool bakeInactiveObjects = false)
+        public static bool GetFilterList(GameObject root, List<MeshFilter> list, bool bakeInactiveObjects = false)
         {
             if (root == null)
-                return;
+                return false;
 
-            foreach (var group in root.GetComponentsInChildren<LODGroup>(bakeInactiveObjects))
+            int progressIndex = 0;
+            var lodGroups = root.GetComponentsInChildren<LODGroup>(bakeInactiveObjects);
+            var meshFilters = root.GetComponentsInChildren<MeshFilter>(bakeInactiveObjects);
+
+            foreach (var group in lodGroups)
             {
+                progressIndex++;
+                if (UpdateEditorProgressBar(
+                    $"Collecting mesh filters: {progressIndex} / {lodGroups.Length + meshFilters.Length}",
+                    progressIndex * 1.0f / (lodGroups.Length + meshFilters.Length)))
+                    return false;
+
                 Renderer[] renderers = group.GetLODs()[0].renderers;
                 foreach (var renderer in renderers)
                 {
@@ -80,8 +90,14 @@ namespace Unity.VirtualMesh.Editor
                 }
             }
 
-            foreach (var filter in root.GetComponentsInChildren<MeshFilter>(bakeInactiveObjects))
+            foreach (var filter in meshFilters)
             {
+                progressIndex++;
+                if (UpdateEditorProgressBar(
+                    $"Collecting mesh filters: {progressIndex} / {lodGroups.Length + meshFilters.Length}",
+                    progressIndex * 1.0f / (lodGroups.Length + meshFilters.Length)))
+                    return false;
+
                 if (filter.sharedMesh == null)
                     continue;
 
@@ -114,6 +130,10 @@ namespace Unity.VirtualMesh.Editor
 
                 list.Add(filter);
             }
+
+            EditorUtility.ClearProgressBar();
+
+            return list.Count > 0;
         }
 
         /// <summary>
@@ -165,10 +185,11 @@ namespace Unity.VirtualMesh.Editor
         /// Converts shaders into versions that contain vertex shaders that the virtual mesh system supports.
         /// </summary>
         /// <param name="meshFilters">List of MeshFilters to bake.</param>
-        public static void ConvertShaders(List<MeshFilter> meshFilters)
+        /// <param name="bakeOpaqueObjectsOnly">Flag to indicate if only objects with opaque render queues should be baked.</param>
+        public static bool ConvertShaders(List<MeshFilter> meshFilters, bool bakeOpaqueObjectsOnly = true)
         {
             if (meshFilters.Count == 0)
-                return;
+                return false;
 
             var materials = new List<Material>();
 
@@ -176,7 +197,6 @@ namespace Unity.VirtualMesh.Editor
             foreach (var filter in meshFilters)
             {
                 var mesh = filter.sharedMesh;
-
                 if (mesh.subMeshCount != filter.gameObject.GetComponent<MeshRenderer>().sharedMaterials.Length)
                     continue;
 
@@ -189,7 +209,7 @@ namespace Unity.VirtualMesh.Editor
                     if (desc.topology != MeshTopology.Triangles)
                         continue;
 
-                    if (!CheckSupportedShader(material.shader))
+                    if (!CheckSupportedShader(material.shader, bakeOpaqueObjectsOnly))
                         continue;
 
                     int materialIndex = materials.FindIndex(x => material.GetInstanceID().Equals(x.GetInstanceID()));
@@ -201,9 +221,17 @@ namespace Unity.VirtualMesh.Editor
                 }
             }
 
+            int progressIndex = 0;
+
             // generate shader file assets
             for (int i = 0; i < materials.Count; i++)
             {
+                progressIndex++;
+                if (UpdateEditorProgressBar(
+                    $"Converting materials: {progressIndex} / {materials.Count}",
+                    progressIndex * 1.0f / materials.Count))
+                    return false;
+
                 var shader = materials[i].shader;
                 var path = AssetDatabase.GetAssetPath(shader);
 
@@ -269,6 +297,8 @@ namespace Unity.VirtualMesh.Editor
                     AssetDatabase.ImportAsset($"{ResourcePathDefinitions.shadersCachePath}/{Path.GetFileNameWithoutExtension(path)}_VMESH.shader");
                 }
             }
+
+            return true;
         }
 
         /// <summary>
@@ -276,7 +306,9 @@ namespace Unity.VirtualMesh.Editor
         /// This also outputs asset bundles containing placeholder meshes and materials.
         /// </summary>
         /// <param name="meshFilters">List of MeshFilters to bake.</param>
-        public static void ConvertMeshes(List<MeshFilter> meshFilters)
+        /// <param name="bakeOpaqueObjectsOnly">Flag to indicate if only objects with opaque render queues should be baked.</param>
+        /// <param name="simplificationTargetError">Flag to indicate if only objects with opaque render queues should be baked.</param>
+        public static void ConvertMeshes(List<MeshFilter> meshFilters, bool bakeOpaqueObjectsOnly = true, float simplificationTargetError = 0.01f)
         {
             var materials = new List<Material>();
             var materialData = new List<MaterialData>();
@@ -308,31 +340,19 @@ namespace Unity.VirtualMesh.Editor
             int submeshCount = 0;
             int degenerativeClusterCount = 0;
 
-            int meshFiltersCount = meshFilters.Count;
-            int meshFiltersIndex = 0;
-
-            bool updateProgressBar()
-            {
-                bool cancelled = EditorUtility.DisplayCancelableProgressBar(
-                    "Convert Meshes",
-                    $"Converting {meshFiltersIndex} / {meshFiltersCount}",
-                    meshFiltersIndex * 1.0f / meshFiltersCount);
-
-                if (cancelled)
-                    EditorUtility.ClearProgressBar();
-
-                return cancelled;
-            }
-
             uint bakingVertexByteSize = (uint)sizeof(Vertex);
             uint meshletVertexMaxCount = k_ClusterVertexMaxCount;
             uint meshletTriangleMaxCount = k_ClusterTriangleCount;
 
+            int progressIndex = 0;
+
             // process input mesh filters
             foreach (var filter in meshFilters)
             {
-                meshFiltersIndex++;
-                if (updateProgressBar())
+                progressIndex++;
+                if (UpdateEditorProgressBar(
+                    $"Converting meshes: {progressIndex} / {meshFilters.Count}",
+                    progressIndex * 1.0f / meshFilters.Count))
                     return;
                 
                 var mesh = filter.sharedMesh;
@@ -371,7 +391,7 @@ namespace Unity.VirtualMesh.Editor
                     if (desc.topology != MeshTopology.Triangles)
                         continue;
 
-                    if (!CheckSupportedShader(material.shader))
+                    if (!CheckSupportedShader(material.shader, bakeOpaqueObjectsOnly))
                         continue;
 
                     // identify material
@@ -582,10 +602,9 @@ namespace Unity.VirtualMesh.Editor
                             {
                                 // simplify children clusters
                                 uint targetIndexCount = (uint)(lodIndices.Count * 0.5f);
-                                float targetError = 0.01f;
                                 float[] resultError = new float[1];
                                 var lodIndicesArray = lodIndices.ToArray();
-                                uint lodIndexCount = MeshOperations.Simplify(lodIndicesArray, verticesLOD0, bakingVertexByteSize, targetIndexCount, targetError, 0x1, resultError);
+                                uint lodIndexCount = MeshOperations.Simplify(lodIndicesArray, verticesLOD0, bakingVertexByteSize, targetIndexCount, simplificationTargetError, 0x1, resultError);
 
                                 // early stop based on simlyfication fail
                                 bool reachedSimplifyLimit = lodIndexCount == lodIndicesArray.Length;
@@ -929,9 +948,22 @@ namespace Unity.VirtualMesh.Editor
         }
 
         /// <summary>
+        /// Displays and updates an editor progress bar during baking.
+        /// </summary>
+        private static bool UpdateEditorProgressBar(string info, float progress)
+        {
+            bool cancelled = EditorUtility.DisplayCancelableProgressBar("Virtual Mesh Baking...", info, progress);
+            if (cancelled)
+                EditorUtility.ClearProgressBar();
+
+            return cancelled;
+        }
+
+        /// <summary>
         /// Checks if the specified shader is supported by the virtual mesh system for rendering.
         /// </summary>
-        private static bool CheckSupportedShader(Shader shader)
+        /// <param name="supportOpaqueOnly">Flag to indicate if only objects with opaque render queues should be supported.</param>
+        private static bool CheckSupportedShader(Shader shader, bool supportOpaqueOnly)
         {
             var shaderPath = AssetDatabase.GetAssetPath(shader);
             bool supportedType =
@@ -939,7 +971,7 @@ namespace Unity.VirtualMesh.Editor
                 shader.name.Equals("Universal Render Pipeline/Lit");
 
             var renderQueue = shader.renderQueue;
-            bool supportedQueue = renderQueue >= (int)RenderQueue.Geometry && renderQueue <= (int)RenderQueue.GeometryLast;
+            bool supportedQueue = !supportOpaqueOnly || (renderQueue >= (int)RenderQueue.Geometry && renderQueue <= (int)RenderQueue.GeometryLast);
 
             return supportedType && supportedQueue;
         }

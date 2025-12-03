@@ -1,4 +1,4 @@
-#include "Packages/com.unity.virtualmesh/ShaderLibrary/Common.hlsl"
+#include "Packages/com.unity.virtualmesh/Runtime/ShaderLibrary/Common.hlsl"
 
 PackedVaryings vert(uint vertexID : SV_VertexID, uint instanceID : SV_InstanceID)
 {

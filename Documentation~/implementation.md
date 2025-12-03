@@ -47,13 +47,16 @@ To detect if a page needs loading, the CPU keeps a record of the status of every
 
 - ***TooFar*** is similar to ***Waiting*** because the GPU has requested the page, but its contents are considered to be too far away from the camera, so the CPU will not load it to save page slots for geometry that is closer to the camera.
 
-Updates to page statuses are made on the GPU based on the bounding boxes surrounding the geometry contained inside each page. Pages are sorted in order of the size of their bounds' projection on the screen so that pages that have a bigger geometry size on screen are requested with higher priority. On top of this, the distance between a page and the camera is taken into account to avoid requesting pages that are very far.
+Updates to page statuses are made on the GPU based on the bounding boxes surrounding the geometry contained inside each page. Pages are sorted in order of the size of their bounds' projection on the screen so that pages that have a bigger geometry size on screen are requested with higher priority. On top of this, the distance between a page and the camera is taken into account to avoid requesting pages that are very far. This distance value can be changed by adjusting the `m_CameraLoadDistanceThreshold` variable in *Runtime/VirtualMeshManager.cs*.
 
 ## Baking
 
 To bake virtual meshes and prepare them for rendering, the system performs several tasks that are implemented inside *Editor/VirtualMeshBakerAPI.cs*.
 
 First, shaders used by objects being baked need to be converted to versions that use vertex shaders compatible with the instancing and attribute unpacking schemes required by virtual meshes. The baker picks up shader source codes and replaces includes corresponding to files with vertex shader code with alternatives that support virtual meshes (see the `ConvertShaders` function in *Editor/VirtualMeshBakerAPI.cs*).
+
+> [!NOTE]
+> Shaders that are not compatible with the virtual mesh system are automatically skipped. This behaviour can be adjusted in the `CheckSupportedShader` in *Editor/VirtualMeshBakerAPI.cs*.
 
 The next step is to iterate over GameObjects that need to be converted and apply the following algorithm to convert them (see the `ConvertMeshes` function in *Editor/VirtualMeshBakerAPI.cs*):
 
