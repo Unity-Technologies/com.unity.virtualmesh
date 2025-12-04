@@ -127,7 +127,7 @@ void ClusterOcclusionPass(uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_Grou
     uint lodType = instanceData.z & 0x3;
 
 	// select LODs
-    half2 error = mad((half2)LODSwitchThreshold, distance((half3)_WorldSpaceCameraPos, posCenter) - posRadius, -half2(f16tof32(instanceData.w), f16tof32(instanceData.w >> 16)));
+    half2 error = mad((half2)LODProjectionErrorFactor, distance((half3)_WorldSpaceCameraPos, posCenter) - posRadius, -half2(f16tof32(instanceData.w), f16tof32(instanceData.w >> 16)));
     bool selectLOD = !FrustumCullSphere(posCenter, posRadius) // frustum culling
 		&& (lodType == 0 // standalone cluster
         || (lodType == 1 && error.y < 0.0) // leaf cluster
