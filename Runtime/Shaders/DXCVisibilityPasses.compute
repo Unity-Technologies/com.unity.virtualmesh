@@ -128,12 +128,13 @@ void ClusterOcclusionPass(uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_Grou
 
 	// select LODs
     half2 error = mad((half2)LODProjectionErrorFactor, distance((half3)_WorldSpaceCameraPos, posCenter) - posRadius, -half2(f16tof32(instanceData.w), f16tof32(instanceData.w >> 16)));
-    bool selectLOD = !FrustumCullSphere(posCenter, posRadius) // frustum culling
+    bool insideFrustum = !FrustumCullSphere(posCenter, posRadius); // frustum culling
+    bool selectLOD = insideFrustum
 		&& (lodType == 0 // standalone cluster
         || (lodType == 1 && error.y < 0.0) // leaf cluster
 		|| (lodType == 2 && (error.x >= 0.0 && error.y < 0.0)) // intermediate cluster
 		|| (lodType == 3 && error.x >= 0.0)); // root cluster
-    bool selectShadowLOD = lodType == 0 || lodType == 3; // standalone and root clusters for shadows
+    bool selectShadowLOD = selectLOD || (!insideFrustum && (lodType == 0 || lodType == 3)); // add standalone and root clusters for shadow casters outside the frustum
     
     [branch] if (!selectLOD && !selectShadowLOD)
         return;
