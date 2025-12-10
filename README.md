@@ -15,7 +15,7 @@ In order to achieve this, the virtual mesh system relies on a few concepts that 
 
 ## Project Status
 
-The package is currently maintained and development is still ongoing. However, we cannot make guarantees about any kind of support or the timing of updates. Here are some of the areas of focus and to-do tasks:
+The package is currently maintained and development is still ongoing. However, since this is an experiment rather than an official Unity product, we cannot make guarantees about any kind of support or the timing of updates. Here are some of the current areas of focus and to-do tasks:
 
 - ***Multiple-scene baking***: the system currently only works with a single scene for demonstration purposes, we are looking into extending the baking system to support multiple scenes.
 - ***Baking UX improvements***: the baking system relies on an editor tool that we are looking into improving for better performance and usability.
@@ -25,9 +25,9 @@ The package is currently maintained and development is still ongoing. However, w
 
 ## Setup
 
-<img src="https://img.shields.io/badge/unity-6000.3.0a3-green.svg?style=flat-square" alt="unity 6000.3.0a3"> <img src="https://img.shields.io/badge/Vulkan-AC162C.svg?style=flat-square&logo=vulkan&logoColor=white" alt="Vulkan">
+<img src="https://img.shields.io/badge/unity-6000.3.0f1-green.svg?style=flat-square" alt="unity 6000.3.0f1"> <img src="https://img.shields.io/badge/Vulkan-AC162C.svg?style=flat-square&logo=vulkan&logoColor=white" alt="Vulkan">
 
-The package relies on URP, Vulkan, and the Render Graph system. Support is intended for Unity 6.3 and onwards. HDRP compatibility has not been tested.
+The package relies on URP, Vulkan, and the Render Graph system. Support is intended for LTS versions of Unity 6.3 and onwards. HDRP compatibility has not been tested.
 
 To install the package and modify it, we recommend cloning the repository into your `Packages` folder and making sure the folder is named `com.unity.virtualmesh`. You can also import the package from the editor via the [package manager](https://docs.unity3d.com/Manual/upm-ui-actions.html).
 
@@ -35,7 +35,7 @@ To use the virtual mesh system, you need to follow the next few steps:
 
 ### 1. Bake virtual meshes (see *Baking* section)
 
-### 2. Add a *VirtualMeshRenderFeature* to your Universal Renderer Data
+### 2. Add a *VirtualMeshRenderFeature* to your Universal Renderer Data asset
 
 ![render-feature](Documentation~/images/render-feature.png)
 
