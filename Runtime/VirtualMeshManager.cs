@@ -150,9 +150,7 @@ namespace Unity.VirtualMesh.Runtime
 
         private bool m_Initialized = false;
         private bool m_HeaderJobRunning = false;
-        private bool m_HeaderLoaded = false;
         private bool[] m_DataJobRunning;
-        private bool m_MaterialsLoaded = false;
 
         private int m_MemoryPageCount = 0;
         private int m_LoadableMemoryPageCount = 128;
@@ -341,7 +339,7 @@ namespace Unity.VirtualMesh.Runtime
         /// <summary>
         /// Checks if the virtual mesh runtime has been initialized.
         /// </summary>
-        public bool IsInitialized => m_Initialized && m_HeaderLoaded && m_MaterialsLoaded;
+        public bool IsInitialized => m_Initialized;
 
         /// <summary>
         /// Checks if the virtual mesh runtime is enabled.
@@ -474,15 +472,7 @@ namespace Unity.VirtualMesh.Runtime
         /// <summary>
         /// The indirect argument buffer used for indirect draws in the virtual mesh pipeline.
         /// </summary>
-        public ref GraphicsBuffer DrawArgsBuffer
-        {
-            get
-            {
-                AllocateDrawBuffers();
-
-                return ref m_DrawArgsBuffer;
-            }
-        }
+        public ref GraphicsBuffer DrawArgsBuffer => ref m_DrawArgsBuffer;
 
         /// <summary>
         /// The indirect argument buffer used for indirect shadow caster draws in the virtual mesh pipeline.
@@ -494,7 +484,7 @@ namespace Unity.VirtualMesh.Runtime
         /// </summary>
         public void FeedbackReadbackCallback(AsyncGPUReadbackRequest request)
         {
-            if (!m_Initialized || m_HeaderJobRunning || !m_HeaderLoaded || !m_MaterialsLoaded)
+            if (!m_Initialized || m_HeaderJobRunning)
                 return;
 
             if (request.hasError)
@@ -622,8 +612,6 @@ namespace Unity.VirtualMesh.Runtime
         {
             if (!IsInitialized)
                 return;
-
-            AllocateDrawBuffers();
 
             for (int i = 0; i < m_Materials.Length; i++)
             {
@@ -823,7 +811,7 @@ namespace Unity.VirtualMesh.Runtime
         /// </summary>
         private bool RequestHeaders()
         {
-            if (!m_Initialized || m_HeaderJobRunning)
+            if (m_Initialized || m_HeaderJobRunning)
                 return false;
 
             LoadMeshHeaderJob job = new LoadMeshHeaderJob
@@ -847,7 +835,7 @@ namespace Unity.VirtualMesh.Runtime
         /// </summary>
         private bool RequestMaterials()
         {
-            if (!m_Initialized)
+            if (m_Initialized)
                 return false;
 
             // load materials
@@ -878,8 +866,6 @@ namespace Unity.VirtualMesh.Runtime
 
                 m_RenderParams[i] = param;
             }
-
-            m_MaterialsLoaded = true;
 
 #if UNITY_EDITOR
             Debug.Log($"[Virtual Mesh] Retrieved {m_Materials.Length} different materials");
@@ -953,14 +939,11 @@ namespace Unity.VirtualMesh.Runtime
         /// </summary>
         private void AllocateDrawBuffers()
         {
-            if (m_DrawArgsBuffer == null || !m_DrawArgsBuffer.IsValid())
-            {
-                var drawArgs = new GraphicsBuffer.IndirectDrawIndexedArgs[m_Materials.Length];
-                for (int i = 0; i < m_Materials.Length; i++)
-                    drawArgs[i] = new GraphicsBuffer.IndirectDrawIndexedArgs { instanceCount = 1 };
-                m_DrawArgsBuffer = new GraphicsBuffer(GraphicsBuffer.Target.IndirectArguments, m_Materials.Length, GraphicsBuffer.IndirectDrawIndexedArgs.size);
-                m_DrawArgsBuffer.SetData(drawArgs);
-            }
+            var drawArgs = new GraphicsBuffer.IndirectDrawIndexedArgs[m_Materials.Length];
+            for (int i = 0; i < m_Materials.Length; i++)
+                drawArgs[i] = new GraphicsBuffer.IndirectDrawIndexedArgs { instanceCount = 1 };
+            m_DrawArgsBuffer = new GraphicsBuffer(GraphicsBuffer.Target.IndirectArguments, m_Materials.Length, GraphicsBuffer.IndirectDrawIndexedArgs.size);
+            m_DrawArgsBuffer.SetData(drawArgs);
         }
 
         /// <summary>
@@ -1062,10 +1045,6 @@ namespace Unity.VirtualMesh.Runtime
             var dispatchArgs = new uint[6] { 0, 1, 1, 0, 1, 1 };
             m_DispatchArgsBuffer = new GraphicsBuffer(GraphicsBuffer.Target.IndirectArguments, 2, sizeof(uint) * 6);
             m_DispatchArgsBuffer.SetData(dispatchArgs);
-
-            AllocateShadowDrawBuffers();
-
-            m_Initialized = true;
         }
 
         /// <summary>
@@ -1086,8 +1065,6 @@ namespace Unity.VirtualMesh.Runtime
                     m_LoadMeshDataJobHandles[i].Complete();
                     m_DataJobRunning[i] = false;
                 }
-                    
-                m_HeaderLoaded = false;
             }
 
             AsyncGPUReadback.WaitAllRequests();
@@ -1320,41 +1297,46 @@ namespace Unity.VirtualMesh.Runtime
 
             if (RequestMetadata())
             {
-                AllocateData();
                 RequestMaterials();
 
-                s_Instance = this;
-
-                // we use reflection to get a reference to the render feature for checking flags and settings (TODO improve this)
-                {
-                    var rpAsset = GraphicsSettings.defaultRenderPipeline as UniversalRenderPipelineAsset;
-                    var rendererDataListField = rpAsset.GetType().GetField("m_RendererDataList", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-                    var list = rendererDataListField.GetValue(rpAsset) as ScriptableRendererData[];
-                    var defaultRendererIndexField = rpAsset.GetType().GetField("m_DefaultRendererIndex", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-                    var defaultRendererIndex = (int)defaultRendererIndexField.GetValue(rpAsset);
-
-                    var cameraData = GetComponent<UniversalAdditionalCameraData>();
-                    var rendererIndexField = cameraData.GetType().GetField("m_RendererIndex", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-                    var index = (int)rendererIndexField.GetValue(cameraData);
-
-                    var rendererData = index == -1 ? list[defaultRendererIndex] as UniversalRendererData : list[index] as UniversalRendererData;
-                    foreach (var feature in rendererData.rendererFeatures)
-                    {
-                        if (feature is VirtualMeshRenderFeature)
-                        {
-							m_VirtualMeshRenderFeature = feature as VirtualMeshRenderFeature;
-                            break;
-                        }
-                    }
-
-#if UNITY_EDITOR
-                    if (m_VirtualMeshRenderFeature == null)
-                        Debug.LogError("[Virtual Mesh] No virtual mesh render feature was found on the camera's renderer");
-#endif
-                }
+                AllocateData();
+                AllocateDrawBuffers();
+                AllocateShadowDrawBuffers();
 
                 RequestHeaders();
+
+                m_Initialized = true;
             }
+
+            // we use reflection to get a reference to the render feature for checking flags and settings (TODO improve this)
+            {
+                var rpAsset = GraphicsSettings.defaultRenderPipeline as UniversalRenderPipelineAsset;
+                var rendererDataListField = rpAsset.GetType().GetField("m_RendererDataList", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                var list = rendererDataListField.GetValue(rpAsset) as ScriptableRendererData[];
+                var defaultRendererIndexField = rpAsset.GetType().GetField("m_DefaultRendererIndex", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                var defaultRendererIndex = (int)defaultRendererIndexField.GetValue(rpAsset);
+
+                var cameraData = GetComponent<UniversalAdditionalCameraData>();
+                var rendererIndexField = cameraData.GetType().GetField("m_RendererIndex", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                var index = (int)rendererIndexField.GetValue(cameraData);
+
+                var rendererData = index == -1 ? list[defaultRendererIndex] as UniversalRendererData : list[index] as UniversalRendererData;
+                foreach (var feature in rendererData.rendererFeatures)
+                {
+                    if (feature is VirtualMeshRenderFeature)
+                    {
+                        m_VirtualMeshRenderFeature = feature as VirtualMeshRenderFeature;
+                        break;
+                    }
+                }
+
+#if UNITY_EDITOR
+                if (m_VirtualMeshRenderFeature == null)
+                    Debug.LogError("[Virtual Mesh] No virtual mesh render feature was found on the camera's renderer");
+#endif
+            }
+
+            s_Instance = this;
         }
 
         void OnDisable()
@@ -1381,7 +1363,6 @@ namespace Unity.VirtualMesh.Runtime
             // only called once to intercept header jobs finishing
             if (m_HeaderJobRunning && m_LoadMeshHeaderJobHandle.IsCompleted)
             {
-                m_HeaderLoaded = true;
                 m_HeaderJobRunning = false;
 
                 var temp = new uint[m_MemoryPageCount * 4];
