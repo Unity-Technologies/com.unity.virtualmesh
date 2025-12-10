@@ -77,53 +77,6 @@ Shader "VirtualMesh/CustomPasses"
 
         Pass
         {
-            Name "ShadowDepthBlit"
-
-            ZTest LEqual
-            ZWrite On
-            ColorMask 0
-            Cull Off
-
-            HLSLPROGRAM
-            #pragma vertex vert
-            #pragma fragment frag
-
-            #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Color.hlsl"
-
-            sampler2D _SourceDepth;
-
-            struct Attributes
-            {
-                float3 vertex : POSITION;
-            };
-
-            struct Varyings
-            {
-                float4 vertex : SV_POSITION;
-                float2 texcoord : TEXCOORD0;
-            };
-
-            Varyings vert(Attributes input)
-            {
-                Varyings output = (Varyings)0;
-                output.vertex = float4(input.vertex.xy, 0.0, 1.0);
-                output.texcoord = (input.vertex.xy + 1.0) * 0.5;
-#if UNITY_UV_STARTS_AT_TOP
-                output.texcoord = output.texcoord * float2(1.0, -1.0) + float2(0.0, 1.0);
-#endif
-
-                return output;
-            }
-
-            half frag(Varyings input) : SV_Depth
-            {
-                return tex2D(_SourceDepth, input.texcoord).r;
-            }
-            ENDHLSL
-        }
-
-        Pass
-        {
             Name "DepthPyramidBlit"
 
             ZWrite Off
@@ -141,32 +94,25 @@ Shader "VirtualMesh/CustomPasses"
 
             sampler2D _DepthTexture;
 
-            struct Attributes
-            {
-                float4 position : POSITION;
-                float2 uv : TEXCOORD0;
-            };
-
             struct Varyings
             {
                 float4 position : SV_POSITION;
                 float2 uv : TEXCOORD0;
             };
 
-            Varyings vert(Attributes v)
+            Varyings vert(uint vertexID : SV_VertexID)
             {
-                Varyings o;
-                o.position = TransformWorldToHClip(v.position.xyz);
-                o.uv = v.uv;
+                Varyings OUT = (Varyings)0;
 
-                return o;
+                OUT.position = GetFullScreenTriangleVertexPosition(vertexID);
+                OUT.uv = GetFullScreenTriangleTexCoord(vertexID);
+
+                return OUT;
             }
 
             half frag(Varyings IN) : Color
             {
-                float2 uv = IN.uv;
-
-                return tex2D(_DepthTexture, uv).r;
+                return tex2D(_DepthTexture, IN.uv).r;
             }
 
             ENDHLSL

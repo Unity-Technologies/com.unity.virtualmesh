@@ -352,9 +352,10 @@ namespace Unity.VirtualMesh.Runtime
                     }
                 }
 
-				// blit depth to top mip
-				data.settings.customPassMaterial.SetTexture(VirtualMeshShaderProperties.DepthTexture, data.cameraDepth);
-				cmd.Blit(RenderTargetIdentifier.Invalid, data.settings.depthPyramid, data.settings.customPassMaterial, 2, 0); // we don't need a source so using an invalid identifier is okay
+                // blit depth to top mip
+                data.settings.customPassMaterial.SetTexture(VirtualMeshShaderProperties.DepthTexture, data.cameraDepth);
+                cmd.SetRenderTarget(new RenderTargetIdentifier(data.settings.depthPyramid, 0), RenderBufferLoadAction.DontCare, RenderBufferStoreAction.Store);
+                cmd.DrawProcedural(Matrix4x4.identity, data.settings.customPassMaterial, 1, MeshTopology.Triangles, 3, 1);
 
 				// build mip chain
 				int threadGroupCount = Mathf.CeilToInt(data.settings.depthPyramid.width / 16.0f);
