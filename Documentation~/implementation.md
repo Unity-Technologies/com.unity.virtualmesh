@@ -47,7 +47,7 @@ To detect if a page needs loading, the CPU keeps a record of the status of every
 
 - ***TooFar*** is similar to ***Waiting*** because the GPU has requested the page, but its contents are considered to be too far away from the camera, so the CPU will not load it to save page slots for geometry that is closer to the camera.
 
-Updates to page statuses are made on the GPU based on the bounding boxes surrounding the geometry contained inside each page. Pages are sorted in order of the size of their bounds' projection on the screen so that pages that have a bigger geometry size on screen are requested with higher priority. On top of this, the distance between a page and the camera is taken into account to avoid requesting pages that are very far. This distance value can be changed by adjusting the `m_CameraLoadDistanceThreshold` variable in *Runtime/VirtualMeshManager.cs*.
+Updates to page statuses are made on the GPU based on the bounding boxes surrounding the geometry contained inside each page. Pages are sorted in order of the size of their bounds' projection on the screen so that pages that have a bigger geometry size on screen are requested with higher priority. On top of this, the distance between a page and the camera is taken into account to avoid requesting pages that are very far. This distance value can be changed by adjusting the `CameraLoadDistanceThreshold` property in *Runtime/VirtualMeshManager.cs*.
 
 ## Baking
 
@@ -56,24 +56,32 @@ To bake virtual meshes and prepare them for rendering, the system performs sever
 First, shaders used by objects being baked need to be converted to versions that use vertex shaders compatible with the instancing and attribute unpacking schemes required by virtual meshes. The baker picks up shader source codes and replaces includes corresponding to files with vertex shader code with alternatives that support virtual meshes (see the `ConvertShaders` function in *Editor/VirtualMeshBakerAPI.cs*).
 
 > [!NOTE]
-> Shaders that are not compatible with the virtual mesh system are automatically skipped. This behaviour can be adjusted in the `CheckSupportedShader` in *Editor/VirtualMeshBakerAPI.cs*.
+> Shaders that are not compatible with the virtual mesh system are automatically skipped. This behaviour can be adjusted in the `CheckSupportedShader` function in *Editor/VirtualMeshBakerAPI.cs*.
 
 The next step is to iterate over GameObjects that need to be converted and apply the following algorithm to convert them (see the `ConvertMeshes` function in *Editor/VirtualMeshBakerAPI.cs*):
 
-1. We first generate a list of `MeshFilter` objects to loop over. For now, the selection criteria is to pick only the highest LOD of every LODGroup hierarchy, or the whole `MeshFilter` if it is a standalone mesh without LODs.
+1. We first generate a list of `MeshFilter` objects to loop over. For now, the selection criteria is to pick only the highest LOD of every LODGroup hierarchy, or the whole `MeshFilter` if it is a standalone mesh without LODs (see the `GetFilterList` function in *Editor/VirtualMeshBakerAPI.cs*).
 
 2. For every `MeshFilter` chosen previously, we select the filter's `sharedMesh` and loop over its submeshes.
 
 3. For every submesh, we check if its material's shader is supported or not, or if its topology is not triangles (we only support triangle-based meshes for simplicity). The submesh's material is then assigned to a unique ID, which will be used to group geometry per material for draw calls.
 
-4. Using `MeshOperations.BuildMeshlets`, we split the submesh into meshlets of 64 triangles.
+4. Each submesh's geometry buffers (triangle indices, vertex positions and attributes) are then extracted. The vertex position values are compressed into half-precision floats to improve streaming and GPU data handling performance. This effectively quantizes vertex positions and slightly impacts the final geometry's appearance.
 
-5. The resulting meshlets are partitioned with `MeshOperations.PartitionMeshlets`, which gives us groups of meshlets to use as leaf nodes (highest density LODs) for our cluster groups.
+5. Using `MeshOperations.BuildMeshlets`, we split the submesh into meshlets of 64 triangles.
 
-6. For every partition, we merge the meshlets into a single index buffer to perfom consecutive simplification and clustering over it until a resulting cluster hierarchy is built. During each step of the recursion we merge and simplify the clusters corresponding to a layer of the LOD hierarchy and record values that will allow us to switch between these layers during runtime.
+6. The resulting meshlets are partitioned with `MeshOperations.PartitionMeshlets`, which gives us groups of meshlets to use as leaf nodes (highest density LODs) for our cluster groups.
 
-7. For every resulting group, we find a page where the whole group's hierarchy fits while not exceeding the max number of instances (= meshlets) allowed per page. This is done by finding a suitable `MemoryPageData` class to record the data in an array of instances each corresponding to a page.
+7. For every partition, we merge the meshlets into a single index buffer to perfom consecutive simplification and clustering over it until a resulting cluster hierarchy is built. During each step of the recursion we merge and simplify the clusters corresponding to a layer of the LOD hierarchy and record values that will allow us to switch between these layers during runtime.
 
-8. For every resulting group, we also keep a separate set of index and vertex buffers corresponding to the leaf clusters. These will be merged with other buffers from the same memory page to form a mesh representing the page's placeholder.
+8. For every resulting group, we find a page where the whole group's hierarchy fits while not exceeding the max number of instances (= meshlets) allowed per page. This is done by finding a suitable `MemoryPageData` class to record the data in an array of instances each corresponding to a page.
 
-9. After building all the cluster groups, we generate placeholders and serialize every `MemoryPageData` instance into corresponding files that will be streamed during runtime. Lastly, we export asset bundles that hold all the materials and placeholder meshes generated during the process (see the `WriteFiles` function in *Editor/VirtualMeshBakerAPI.cs*).
+9. For every resulting group, we also keep a separate set of index and vertex buffers corresponding to the leaf clusters. These will be merged with other buffers from the same memory page to form a mesh representing the page's placeholder.
+
+10. After building all the cluster groups, we generate placeholders and serialize every `MemoryPageData` instance into corresponding files that will be streamed during runtime. Lastly, we export asset bundles that hold all the materials and placeholder meshes generated during the process (see the `WriteFiles` function in *Editor/VirtualMeshBakerAPI.cs*).
+
+## LOD Selection
+
+The selection of the LOD layer to draw within each cluster group is based on an error metric generated during simplification and representing how much each simplified layer deviates from its children in the hierarchy. The error is scaled to represent this deviation in screen-space based on a 1000 x 1000 pixel viewport and the main camera's FOV during baking (see the `ComputeLODProjectionError` function in *Editor/VirtualMeshBakerAPI.cs*). Changing the camera's FOV requires a rebake.
+
+In addition, a scaling factor is applied on the GPU to account for transform scales. You can adjust this value to either expand or shrink the range of switching LODs to better cover the depth of geometry shown in the camera (see the `LODProjectionErrorFactor` constant define in *Runtime/ShaderLibrary/ComputeCommon.hlsl*).

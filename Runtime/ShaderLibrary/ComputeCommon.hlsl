@@ -1,7 +1,7 @@
 #define MaxMemoryPageCount (256)
 #define MaxMaterialCount (128)
 #define MemoryPageMaxInstanceCount (1600.0)
-#define LODSwitchThreshold (0.0005)
+#define LODProjectionErrorFactor (0.1)
 #define DepthPyramidMaxSamplingLevel (8)
 #define DepthPyramidResolution (256)
 #define DepthTestOffset (0.01) // only used for per-tri culling to counter precision issues and z-fighting caused by the depth pyramid's first mip

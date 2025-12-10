@@ -559,7 +559,7 @@ namespace Unity.VirtualMesh.Editor
                             }
                             optimizeIndices.Add(new List<uint>());
                             clusterChildrenTypes.Add(clusterCount == 1 ? 0x0u : 0x1u);
-                            clusterChildrenErrors.Add(math.f32tof16(selfError));
+                            clusterChildrenErrors.Add(0);
 
                             // gather indices
                             for (int i = 0; i < meshlets[p][m].triangleCount; i++)
@@ -607,7 +607,7 @@ namespace Unity.VirtualMesh.Editor
                                 uint lodIndexCount = MeshOperations.Simplify(lodIndicesArray, verticesLOD0, bakingVertexByteSize, targetIndexCount, simplificationTargetError, 0x1, resultError);
 
                                 // early stop based on simlyfication fail
-                                bool reachedSimplifyLimit = lodIndexCount == lodIndicesArray.Length;
+                                bool reachedSimplifyLimit = lodIndexCount == lodIndicesArray.Length || resultError[0] == 0.0f;
 
                                 var lodIndicesResized = new uint[lodIndexCount];
                                 Array.Copy(lodIndicesArray, lodIndicesResized, lodIndexCount);
@@ -621,9 +621,9 @@ namespace Unity.VirtualMesh.Editor
                                 var meshletCountLODX = MeshOperations.BuildMeshlets(meshletsLODX, meshletVerticesLODX, meshletTrianglesLODX, lodIndicesResized, verticesLOD0, bakingVertexByteSize, meshletVertexMaxCount, meshletTriangleMaxCount, 0.0f);
 
                                 // compute LOD projection error
-                                selfError = ComputeLODProjectionError(selfError + math.max(resultError[0], 0.01f));
+                                selfError += resultError[0];
                                 for (int q = 0; q < clusterChildrenErrors.Count; q++)
-                                    clusterChildrenErrors[q] = math.f32tof16(selfError) << 16 | clusterChildrenErrors[q];
+                                    clusterChildrenErrors[q] = math.f32tof16(ComputeLODProjectionError(selfError)) << 16 | clusterChildrenErrors[q];
 
                                 // early stop based on clusterization fail
                                 bool reachedClusterizationLimit = meshletCountLODX == previousMeshletCount;
@@ -662,7 +662,7 @@ namespace Unity.VirtualMesh.Editor
                                     }
                                     optimizeIndices.Add(new List<uint>());
                                     clusterChildrenTypes.Add(reachedRoot ? 0x3u : 0x2u);
-                                    clusterChildrenErrors.Add(math.f32tof16(selfError));
+                                    clusterChildrenErrors.Add(math.f32tof16(ComputeLODProjectionError(selfError)));
 
                                     // gather indices
                                     for (int i = 0; i < meshletsLODX[m].triangleCount; i++)
@@ -1328,7 +1328,7 @@ namespace Unity.VirtualMesh.Editor
         /// <param name="simplificationError">The simplification ratio or error rate resulting from simplifying the cluster group level that contains the current cluster's parents.</param>
         private static float ComputeLODProjectionError(float simplificationError)
         {
-            return simplificationError * 0.5f / math.tan(Camera.main.fieldOfView * math.PI / 180.0f * 0.5f);
+            return simplificationError * 500.0f / math.tan(Camera.main.fieldOfView * math.PI / 180.0f * 0.5f);
         }
 
         /// <summary>
