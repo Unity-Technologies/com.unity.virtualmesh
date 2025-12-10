@@ -111,9 +111,6 @@ namespace Unity.VirtualMesh.Runtime
         private const int k_MemoryPageMaxInstanceCount = 1600;
 
         [SerializeField]
-        private bool m_Enable = true;
-
-        [SerializeField]
         private ComputeShader m_CopyPassesShader;
 
         [SerializeField]
@@ -121,8 +118,6 @@ namespace Unity.VirtualMesh.Runtime
 
         private Mesh m_BoundingMesh;
         private Bounds m_Bounds = new Bounds(Vector3.zero, 10000.0f * Vector3.one);
-
-        private VirtualMeshRenderFeature m_VirtualMeshRenderFeature;
 
         private NativeArray<MemoryPageStatus> m_MemoryPageStatus;
 
@@ -344,11 +339,22 @@ namespace Unity.VirtualMesh.Runtime
         /// <summary>
         /// Checks if the virtual mesh runtime is enabled.
         /// </summary>
-		public bool IsEnabled
-		{
-			get => m_Enable;
-			set { m_Enable = value; }
-		}
+        public bool IsEnabled = true;
+
+        /// <summary>
+        /// Checks if the empty bounding mesh surrounding virtual meshes is enabled.
+        /// </summary>
+        public bool IsBoundingMeshEnabled = false;
+
+        /// <summary>
+        /// Checks if the placeholder system is enabled.
+        /// </summary>
+        public bool IsPlaceholderEnabled = false;
+
+        /// <summary>
+        /// Checks if the debug rendering view is enabled.
+        /// </summary>
+        public bool IsDebugViewEnabled = false;
 
         /// <summary>
         /// The constant buffer containing stride values to index into memory page buffers that contain virtual mesh data.
@@ -512,14 +518,14 @@ namespace Unity.VirtualMesh.Runtime
                                 m_UploadIndexQueue.Enqueue(index);
                                 status = MemoryPageStatus.Waiting;
 
-                                if (m_VirtualMeshRenderFeature != null && _ExternalActivatePlacholderCallback != null)
+                                if (IsPlaceholderEnabled && _ExternalActivatePlacholderCallback != null)
                                     _ExternalActivatePlacholderCallback(index);
                             }
                             else if (tooFar)
                             {
                                 status = MemoryPageStatus.TooFar;
 
-                                if (m_VirtualMeshRenderFeature != null && _ExternalActivatePlacholderCallback != null)
+                                if (IsPlaceholderEnabled && _ExternalActivatePlacholderCallback != null)
                                     _ExternalActivatePlacholderCallback(index);
                             }
                         }
@@ -536,7 +542,7 @@ namespace Unity.VirtualMesh.Runtime
                                 unload = true;
                                 status = MemoryPageStatus.TooFar;
 
-                                if (m_VirtualMeshRenderFeature != null && _ExternalActivatePlacholderCallback != null)
+                                if (IsPlaceholderEnabled && _ExternalActivatePlacholderCallback != null)
                                     _ExternalActivatePlacholderCallback(index);
                             }
                         }
@@ -555,7 +561,7 @@ namespace Unity.VirtualMesh.Runtime
                             {
                                 status = MemoryPageStatus.Unloaded;
 
-                                if (m_VirtualMeshRenderFeature != null && _ExternalDeactivatePlacholderCallback != null)
+                                if (IsPlaceholderEnabled && _ExternalDeactivatePlacholderCallback != null)
                                     _ExternalDeactivatePlacholderCallback(index);
                             }
                         }
@@ -575,7 +581,7 @@ namespace Unity.VirtualMesh.Runtime
                             {
                                 status = MemoryPageStatus.Unloaded;
 
-                                if (m_VirtualMeshRenderFeature != null && _ExternalDeactivatePlacholderCallback != null)
+                                if (IsPlaceholderEnabled && _ExternalDeactivatePlacholderCallback != null)
                                     _ExternalDeactivatePlacholderCallback(index);
                             }
                         }
@@ -597,7 +603,7 @@ namespace Unity.VirtualMesh.Runtime
                 m_MemoryPageStatus[index] = status;
             }
 
-            if (m_Enable)
+            if (IsEnabled)
             {
                 StreamingJobsKickoff();
                 StreamingJobsWrapup();
@@ -644,7 +650,7 @@ namespace Unity.VirtualMesh.Runtime
         /// </summary>
         private void DrawPlaceholders()
         {
-            if (!IsInitialized || m_VirtualMeshRenderFeature == null || !m_VirtualMeshRenderFeature.settings.enablePlaceholders)
+            if (!IsInitialized || !IsPlaceholderEnabled)
                 return;
 
 			if (_ExternalPlaceholdersCallback != null)
@@ -1199,7 +1205,7 @@ namespace Unity.VirtualMesh.Runtime
                     m_LoadedMemoryPages[m_SlotIDs[i]] = m_PageIDs[i];
                     DispatchStatusBufferUpdate(m_PageIDs[i], m_SlotIDs[i]);
 
-                    if (m_VirtualMeshRenderFeature != null && _ExternalDeactivatePlacholderCallback != null)
+                    if (IsPlaceholderEnabled && _ExternalDeactivatePlacholderCallback != null)
                         _ExternalDeactivatePlacholderCallback(m_PageIDs[i]);
 
                     // flag job as done
@@ -1308,34 +1314,6 @@ namespace Unity.VirtualMesh.Runtime
                 m_Initialized = true;
             }
 
-            // we use reflection to get a reference to the render feature for checking flags and settings (TODO improve this)
-            {
-                var rpAsset = GraphicsSettings.defaultRenderPipeline as UniversalRenderPipelineAsset;
-                var rendererDataListField = rpAsset.GetType().GetField("m_RendererDataList", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-                var list = rendererDataListField.GetValue(rpAsset) as ScriptableRendererData[];
-                var defaultRendererIndexField = rpAsset.GetType().GetField("m_DefaultRendererIndex", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-                var defaultRendererIndex = (int)defaultRendererIndexField.GetValue(rpAsset);
-
-                var cameraData = GetComponent<UniversalAdditionalCameraData>();
-                var rendererIndexField = cameraData.GetType().GetField("m_RendererIndex", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-                var index = (int)rendererIndexField.GetValue(cameraData);
-
-                var rendererData = index == -1 ? list[defaultRendererIndex] as UniversalRendererData : list[index] as UniversalRendererData;
-                foreach (var feature in rendererData.rendererFeatures)
-                {
-                    if (feature is VirtualMeshRenderFeature)
-                    {
-                        m_VirtualMeshRenderFeature = feature as VirtualMeshRenderFeature;
-                        break;
-                    }
-                }
-
-#if UNITY_EDITOR
-                if (m_VirtualMeshRenderFeature == null)
-                    Debug.LogError("[Virtual Mesh] No virtual mesh render feature was found on the camera's renderer");
-#endif
-            }
-
             s_Instance = this;
         }
 
@@ -1382,13 +1360,13 @@ namespace Unity.VirtualMesh.Runtime
                 RequestPlaceholders();
             }
 
-            if (m_Enable)
+            if (IsEnabled)
             {
-                if (m_VirtualMeshRenderFeature != null && m_VirtualMeshRenderFeature.settings.enableBoundingMesh)
+                if (IsBoundingMeshEnabled)
                     DrawBoundingMesh();
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-                if (m_VirtualMeshRenderFeature != null && !m_VirtualMeshRenderFeature.settings.enableOcclusionDebugView)
+                if (!IsDebugViewEnabled)
 #endif
                 {
                     DrawVirtualMesh();
@@ -1404,7 +1382,7 @@ namespace Unity.VirtualMesh.Runtime
 
         void OnGUI()
         {
-            if (!m_Initialized || !m_Enable)
+            if (!m_Initialized || !IsEnabled)
                 return;
 
             int unloaded = 0;

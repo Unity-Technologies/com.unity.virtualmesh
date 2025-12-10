@@ -28,14 +28,14 @@ Lastly, the streaming system relies on an embedded version of [BetterStreamingAs
 
 The virtual mesh system uses custom binary files to stream mesh data during runtime. These files, saved inside the project's *Assets/StreamingAssets* folder, are called pages and are loaded dynamically based on requests made on the GPU.
 
-These requests are given to the CPU via a `GraphicsBuffer` with the RequestAsyncReadback API. Based on the contents of that buffer, the CPU queues pages that need to be loaded and dispatches Unity C# jobs that handle the file I/O and streaming. Each job writes to an upload buffer comprised of several `GraphicsBuffer` objects with `GraphicsBuffer.UsageFlags.LockBufferForWrite` mode for asynchronous writing to the GPU. The buffers are wrapped in a fenced buffer implementation taken taken from the Entities Graphics package.
+These requests are given to the CPU via a `GraphicsBuffer` with the RequestAsyncReadback API. Based on the contents of that buffer, the CPU queues pages that need to be loaded and dispatches Unity C# jobs that handle the file I/O and streaming. Each job writes to an upload buffer comprised of several `GraphicsBuffer` objects with `GraphicsBuffer.UsageFlags.LockBufferForWrite` mode for asynchronous writing to the GPU. The buffers are wrapped in a fenced buffer implementation taken from the Entities Graphics package.
 
-Each upload buffer corresponds to the data of an entire page, including metadata and all the cluster index and vertex buffers. Have the C# jobs finish filling them, the buffers are read from a series of compute shader dispatches that copy their content into the large runtime buffers used for drawing virtual meshes (see the `StreamingJobsKickoff` and `StreamingJobsWrapup` functions in *Runtime/VirtualMeshManager.cs*).
+Each upload buffer corresponds to the data of an entire page, including metadata and all the cluster index and vertex buffers. After the C# jobs finish filling them, the buffers are read from a series of compute shader dispatches that copy their content into the large runtime buffers used for drawing virtual meshes (see the `StreamingJobsKickoff` and `StreamingJobsWrapup` functions in *Runtime/VirtualMeshManager.cs*).
 
 There is a limited number of upload buffers, each independent from each other. When the CPU loads a page, it must look for an upload buffer that is not currently being written to by a job. If a buffer is available, it will be pooled to load the designated page and locked until the compute copies are finished.
 
 > [!NOTE]
-> Changing the number of upload buffers (`k_UploadBufferCount` in *Runtime/VirtualMeshManager.cs*) has a low impact on the system's functionality and is typically a variable that can be adjusted based on the project's memory budget.
+> Changing the number of upload buffers (`k_UploadBufferCount` in *Runtime/VirtualMeshManager.cs*) has no impact on the system's functionality and is typically a variable that can be adjusted based on the project's memory budget.
 
 To detect if a page needs loading, the CPU keeps a record of the status of every memory page (see the `MemoryPageStatus` enum in *Runtime/VirtualMeshManager.cs*).
 

@@ -23,11 +23,6 @@ namespace Unity.VirtualMesh.Runtime
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             public Material debugPassMaterial = null;
 #endif
-
-			public bool enableBoundingMesh;
-			public bool enableOcclusionDebugView;
-			public bool enablePlaceholders;
-
 #if UNITY_EDITOR
             public void EnsureAllUnityResources()
             {
@@ -122,12 +117,6 @@ namespace Unity.VirtualMesh.Runtime
             m_CascadeSlices = new ShadowSliceData[4];
         }
 
-        public override void Configure(CommandBuffer cmd, RenderTextureDescriptor cameraTextureDescriptor)
-        {
-            // prevent clearing the shadow map as render target
-            ConfigureClear(ClearFlag.None, Color.black);
-        }
-
         static void ExecutePass(PassData data, UnsafeGraphContext context)
         {
             var cmd = CommandBufferHelpers.GetNativeCommandBuffer(context.cmd);
@@ -216,9 +205,7 @@ namespace Unity.VirtualMesh.Runtime
                 passData.shadowTexture = resourceData.mainShadowsTexture;
                 passData.cascadeSlices = m_CascadeSlices;
 
-                //builder.UseGlobalTexture(Shader.PropertyToID("_MainLightShadowmapTexture"), AccessFlags.Write);
                 builder.UseTexture(passData.shadowTexture, AccessFlags.Write);
-                //builder.SetRenderAttachmentDepth(passData.shadowTexture, AccessFlags.Write);
 
                 builder.AllowPassCulling(false);
                 builder.AllowGlobalStateModification(true);
@@ -275,7 +262,7 @@ namespace Unity.VirtualMesh.Runtime
 
                 // render previous frame geometry
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-                if (data.settings.enableOcclusionDebugView)
+                if (VirtualMeshManager.Instance.IsDebugViewEnabled)
                 {
                     // needed for the debug visualisation pass
                     cmd.ClearRenderTarget(true, true, Color.black);
