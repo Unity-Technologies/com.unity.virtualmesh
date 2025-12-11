@@ -57,6 +57,7 @@ The VirtualMeshManager script has several fields:
 - `Copy Passes Shader` should be set to *Packages/com.unity.virtualmesh/Runtime/Shaders/CopyPasses.compute*
 - `Placeholder Material` should be set to *Packages/com.unity.virtualmesh/Runtime/Materials/PlaceholderLit.mat*
 - `Is Enabled` allows you to enable or disable virtual meshes without incurring the heavy cost of enabling or disabling the `Virtual Mesh Manager` component itself
+- `Is Internal Draw Pass Enabled` tells the system to use a dedicated render pass to draw disoccluded geometry instead of the URP default opaque passes
 - `Is Bounding Mesh Enabled` tells the system to draw an empty bounding mesh that forces URP to create shadow maps in case only virtual meshes are present in the scene
 - `Is Placeholder Enabled` allows you to enable placeholder meshes that should be drawn instead of memory pages when they are not ready to be used
 - `Is Debug View Enabled` allows you to render virtual meshes with a debug shader (see *Troubleshooting* section)

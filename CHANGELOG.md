@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 - Added third party notice and updated license links
 - Exposed simplification error target in baker
+- Added internal draw pass to prevent opaque pass dependency
 
 ### Changed
 

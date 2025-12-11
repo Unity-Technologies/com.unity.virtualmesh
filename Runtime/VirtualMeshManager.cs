@@ -117,7 +117,6 @@ namespace Unity.VirtualMesh.Runtime
         private Material m_PlaceholderMaterial;
 
         private Mesh m_BoundingMesh;
-        private Bounds m_Bounds = new Bounds(Vector3.zero, 10000.0f * Vector3.one);
 
         private NativeArray<MemoryPageStatus> m_MemoryPageStatus;
 
@@ -342,89 +341,94 @@ namespace Unity.VirtualMesh.Runtime
         public bool IsEnabled = true;
 
         /// <summary>
+        /// Checks if disoccluded virtual meshes should be rendered with an internal pass instead of the URP opaque pass.
+        /// </summary>
+        public bool IsInternalDrawPassEnabled = true;
+
+        /// <summary>
         /// Checks if the empty bounding mesh surrounding virtual meshes is enabled.
         /// </summary>
-        public bool IsBoundingMeshEnabled = false;
+        public bool IsBoundingMeshEnabled;
 
         /// <summary>
         /// Checks if the placeholder system is enabled.
         /// </summary>
-        public bool IsPlaceholderEnabled = false;
+        public bool IsPlaceholderEnabled;
 
         /// <summary>
         /// Checks if the debug rendering view is enabled.
         /// </summary>
-        public bool IsDebugViewEnabled = false;
+        public bool IsDebugViewEnabled;
 
         /// <summary>
         /// The constant buffer containing stride values to index into memory page buffers that contain virtual mesh data.
         /// </summary>
-		public ref GraphicsBuffer PageStrideConstantBuffer => ref m_PageStrideConstants;
+		public GraphicsBuffer PageStrideConstantBuffer => m_PageStrideConstants;
 
         /// <summary>
         /// The buffer that contains all the metadata read from memory page headers.
         /// </summary>
-        public ref GraphicsBuffer PageDataBuffer => ref m_PageDataBuffer;
+        public GraphicsBuffer PageDataBuffer => m_PageDataBuffer;
 
         /// <summary>
         /// The buffer that contains all the vertex positions loaded from memory pages.
         /// </summary>
-        public ref GraphicsBuffer VertexPositionBuffer => ref m_VertexPositionBuffer;
+        public GraphicsBuffer VertexPositionBuffer => m_VertexPositionBuffer;
 
         /// <summary>
         /// The buffer that contains all the vertex attributes loaded from memory pages.
         /// </summary>
-        public ref GraphicsBuffer VertexAttributeBuffer => ref m_VertexAttributeBuffer;
+        public GraphicsBuffer VertexAttributeBuffer => m_VertexAttributeBuffer;
 
         /// <summary>
         /// The buffer that contains all the triangle indices loaded from memory pages.
         /// </summary>
-        public ref GraphicsBuffer IndexBuffer => ref m_IndexBuffer;
+        public GraphicsBuffer IndexBuffer => m_IndexBuffer;
 
         /// <summary>
         /// The buffer that contains the post-culling compacted triangle indices ready for drawing use.
         /// </summary>
-        public ref GraphicsBuffer CompactedIndexBuffer => ref m_CompactedIndexBuffer;
+        public GraphicsBuffer CompactedIndexBuffer => m_CompactedIndexBuffer;
 
         /// <summary>
         /// The buffer that contains one-bit flags representing triangle visibility for the previous frame.
         /// </summary>
-        public ref GraphicsBuffer PreviousTriangleVisibilityBuffer => ref m_TriangleVisibilityBuffer[m_PingPongBufferIndex % 2];
+        public GraphicsBuffer PreviousTriangleVisibilityBuffer => m_TriangleVisibilityBuffer[m_PingPongBufferIndex % 2];
 
         /// <summary>
         /// The buffer that contains one-bit flags representing triangle visibility for the current frame.
         /// </summary>
-        public ref GraphicsBuffer CurrentTriangleVisibilityBuffer => ref m_TriangleVisibilityBuffer[(m_PingPongBufferIndex + 1) % 2];
+        public GraphicsBuffer CurrentTriangleVisibilityBuffer => m_TriangleVisibilityBuffer[(m_PingPongBufferIndex + 1) % 2];
 
         /// <summary>
         /// The buffer that contains all the per-LOD hierarchy metadata loaded from memory pages.
         /// </summary>
-        public ref GraphicsBuffer GroupDataBuffer => ref m_GroupDataBuffer;
+        public GraphicsBuffer GroupDataBuffer => m_GroupDataBuffer;
 
         /// <summary>
         /// The buffer that contains all the per-cluster metadata loaded from memory pages.
         /// </summary>
-        public ref GraphicsBuffer InstanceDataBuffer => ref m_InstanceDataBuffer;
+        public GraphicsBuffer InstanceDataBuffer => m_InstanceDataBuffer;
 
         /// <summary>
         /// The buffer that contains compacted per-cluster metadata for triangles that survived culling.
         /// </summary>
-        public ref GraphicsBuffer TriangleDataBuffer => ref m_TriangleDataBuffer;
+        public GraphicsBuffer TriangleDataBuffer => m_TriangleDataBuffer;
 
         /// <summary>
         /// The buffer that contains compacted per-cluster metadata for shadow caster triangles that survived culling.
         /// </summary>
-        public ref GraphicsBuffer ShadowTriangleDataBuffer => ref m_ShadowTriangleDataBuffer;
+        public GraphicsBuffer ShadowTriangleDataBuffer => m_ShadowTriangleDataBuffer;
 
         /// <summary>
         /// The buffer containing the memory page streaming decision data computed on the GPU and read back to the CPU.
         /// </summary>
-        public ref GraphicsBuffer FeedbackBuffer => ref m_FeedbackBuffer;
+        public GraphicsBuffer FeedbackBuffer => m_FeedbackBuffer;
 
         /// <summary>
         /// The buffer containing flags to indicate to the GPU if pages are currently being streamed or if they are ready to be processed.
         /// </summary>
-        public ref GraphicsBuffer PageStatusBuffer => ref m_PageStatusBuffer;
+        public GraphicsBuffer PageStatusBuffer => m_PageStatusBuffer;
 
         /// <summary>
         /// Updates the page status buffer based on a specific page's streaming condition.
@@ -473,17 +477,17 @@ namespace Unity.VirtualMesh.Runtime
         /// <summary>
         /// The indirect argument buffer used for indirect compute dispatches in the virtual mesh pipeline.
         /// </summary>
-        public ref GraphicsBuffer DispatchArgsBuffer => ref m_DispatchArgsBuffer;
+        public GraphicsBuffer DispatchArgsBuffer => m_DispatchArgsBuffer;
 
         /// <summary>
         /// The indirect argument buffer used for indirect draws in the virtual mesh pipeline.
         /// </summary>
-        public ref GraphicsBuffer DrawArgsBuffer => ref m_DrawArgsBuffer;
+        public GraphicsBuffer DrawArgsBuffer => m_DrawArgsBuffer;
 
         /// <summary>
         /// The indirect argument buffer used for indirect shadow caster draws in the virtual mesh pipeline.
         /// </summary>
-        public ref GraphicsBuffer ShadowDrawArgsBuffer => ref m_ShadowDrawArgsBuffer;
+        public GraphicsBuffer ShadowDrawArgsBuffer => m_ShadowDrawArgsBuffer;
 
         /// <summary>
         /// Processes the GPU's memory page streaming decision data and handles the streaming loop.
@@ -817,7 +821,7 @@ namespace Unity.VirtualMesh.Runtime
         /// </summary>
         private bool RequestHeaders()
         {
-            if (m_Initialized || m_HeaderJobRunning)
+            if (m_HeaderJobRunning)
                 return false;
 
             LoadMeshHeaderJob job = new LoadMeshHeaderJob
@@ -841,9 +845,6 @@ namespace Unity.VirtualMesh.Runtime
         /// </summary>
         private bool RequestMaterials()
         {
-            if (m_Initialized)
-                return false;
-
             // load materials
             m_MaterialAssetBundle = AssetBundle.LoadFromFile($"{Application.streamingAssetsPath}/{ResourcePathDefinitions.materialBundleFullPath}");
             if (m_MaterialAssetBundle == null)
@@ -862,7 +863,7 @@ namespace Unity.VirtualMesh.Runtime
             {
                 var param = new RenderParams(m_Materials[i]);
                 param.camera = GetComponent<Camera>();
-                param.worldBounds = m_Bounds;
+                param.worldBounds = m_BoundingMesh.bounds;
                 param.shadowCastingMode = ShadowCastingMode.Off; // vmesh shadow maps use a custom pass
                 param.receiveShadows = true;
 
@@ -1303,15 +1304,18 @@ namespace Unity.VirtualMesh.Runtime
 
             if (RequestMetadata())
             {
-                RequestMaterials();
-
                 AllocateData();
-                AllocateDrawBuffers();
-                AllocateShadowDrawBuffers();
 
-                RequestHeaders();
+                if (RequestMaterials())
+                {
+                    AllocateDrawBuffers();
+                    AllocateShadowDrawBuffers();
 
-                m_Initialized = true;
+                    if (RequestHeaders())
+                    {
+                        m_Initialized = true;
+                    }
+                }
             }
 
             s_Instance = this;
@@ -1366,12 +1370,13 @@ namespace Unity.VirtualMesh.Runtime
                     DrawBoundingMesh();
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-                if (!IsDebugViewEnabled)
+                if (!IsDebugViewEnabled && !IsInternalDrawPassEnabled)
 #endif
                 {
                     DrawVirtualMesh();
-                    DrawPlaceholders();
                 }
+
+                DrawPlaceholders();
             }
 
             m_PingPongBufferIndex = ++m_PingPongBufferIndex % 2;
