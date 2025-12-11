@@ -51,7 +51,6 @@ namespace Unity.VirtualMesh.Editor
         const bool k_SimplifyPlaceholders = true;
         const bool k_ExportOBJ = false;
         const bool k_PackIndices = true;
-        const bool k_PackClusterGroupVertices = true;
 
         /// <summary>
         /// Fills a list of MeshFilter objects that should be baked based on a root object specified by the user.
@@ -513,14 +512,12 @@ namespace Unity.VirtualMesh.Editor
 
                     uint optimizeIndexCount = 0;
                     var optimizeIndices = new List<List<uint>>();
-                    uint optimizeVertexCount = 0;
                     var optimizeVertices = new List<List<Vertex>>();
                     var optimizeVerticesPacked = new List<Vertex>();
 
+                    int clusterDataCount = 0;
                     var clusterTypes = new List<uint>();
-                    var clusterChildrenTypes = new List<uint>();
                     var clusterErrors = new List<uint>();
-                    var clusterChildrenErrors = new List<uint>();
 
                     // process meshlets by group
                     for (int p = 0; p < partitionCountLOD0; p++)
@@ -530,36 +527,25 @@ namespace Unity.VirtualMesh.Editor
 
                         uint clusterCount = (uint)meshlets[p].Count;
 
-                        if (k_PackClusterGroupVertices)
-                            copyIndices.Clear();
+                        copyIndices.Clear();
                         lodIndices.Clear();
 
                         optimizeIndexCount = 0;
                         optimizeIndices.Clear();
                         optimizeVerticesPacked.Clear();
-                        if (!k_PackClusterGroupVertices)
-                        {
-                            optimizeVertexCount = 0;
-                            optimizeVertices.Clear();
-                        }
+
+                        clusterDataCount = 0;
                         clusterTypes.Clear();
-                        clusterChildrenTypes.Clear();
                         clusterErrors.Clear();
-                        clusterChildrenErrors.Clear();
 
                         float selfError = 0.0f;
 
                         // record leaf clusters
                         for (int m = 0; m < meshlets[p].Count; m++)
                         {
-                            if (!k_PackClusterGroupVertices)
-                            {
-                                copyIndices.Clear();
-                                optimizeVertices.Add(new List<Vertex>());
-                            }
                             optimizeIndices.Add(new List<uint>());
-                            clusterChildrenTypes.Add(clusterCount == 1 ? 0x0u : 0x1u);
-                            clusterChildrenErrors.Add(0);
+                            clusterTypes.Add(clusterCount == 1 ? 0x0u : 0x1u);
+                            clusterErrors.Add(0);
 
                             // gather indices
                             for (int i = 0; i < meshlets[p][m].triangleCount; i++)
@@ -575,12 +561,6 @@ namespace Unity.VirtualMesh.Editor
                                         index = copyIndices.Count;
                                         copyIndices.Add(vertexIndex);
                                         optimizeVerticesPacked.Add(verticesLOD0[vertexIndex]);
-
-                                        if (!k_PackClusterGroupVertices)
-                                        {
-                                            optimizeVertexCount++;
-                                            optimizeVertices.Last().Add(verticesLOD0[meshletVerticesLOD0[vertexIndex]]);
-                                        }
                                     }
                                     optimizeIndexCount++;
                                     optimizeIndices.Last().Add((uint)index);
@@ -622,8 +602,8 @@ namespace Unity.VirtualMesh.Editor
 
                                 // compute LOD projection error
                                 selfError += resultError[0];
-                                for (int q = 0; q < clusterChildrenErrors.Count; q++)
-                                    clusterChildrenErrors[q] = math.f32tof16(ComputeLODProjectionError(selfError)) << 16 | clusterChildrenErrors[q];
+                                for (int q = clusterDataCount; q < clusterErrors.Count; q++)
+                                    clusterErrors[q] = math.f32tof16(ComputeLODProjectionError(selfError)) << 16 | clusterErrors[q];
 
                                 // early stop based on clusterization fail
                                 bool reachedClusterizationLimit = meshletCountLODX == previousMeshletCount;
@@ -631,23 +611,17 @@ namespace Unity.VirtualMesh.Editor
 
                                 if (reachedSimplifyLimit || reachedClusterizationLimit)
                                 {
-                                    for (int q = 0; q < clusterChildrenTypes.Count; q++)
-                                        clusterChildrenTypes[q] = j == 0 ? 0x0u : 0x3u;
+                                    for (int q = clusterDataCount; q < clusterTypes.Count; q++)
+                                        clusterTypes[q] = j == 0 ? 0x0u : 0x3u;
 
-                                    for (int q = 0; q < clusterChildrenErrors.Count; q++)
-                                        clusterChildrenErrors[q] = j == 0 ? 0 : clusterChildrenErrors[q];
+                                    for (int q = clusterDataCount; q < clusterErrors.Count; q++)
+                                        clusterErrors[q] = j == 0 ? 0 : clusterErrors[q];
 
                                     // don't record this hierarchy level
                                     break;
                                 }
-                                else
-                                {
-                                    clusterTypes.AddRange(clusterChildrenTypes);
-                                    clusterChildrenTypes.Clear();
 
-                                    clusterErrors.AddRange(clusterChildrenErrors);
-                                    clusterChildrenErrors.Clear();
-                                }
+                                clusterDataCount = clusterTypes.Count;
 
                                 // early stop based on hierachy root reached
                                 bool reachedRoot = meshletCountLODX == 1 || j == iterations - 1;
@@ -655,14 +629,9 @@ namespace Unity.VirtualMesh.Editor
                                 // record parent clusters
                                 for (int m = 0; m < meshletCountLODX; m++)
                                 {
-                                    if (!k_PackClusterGroupVertices)
-                                    {
-                                        copyIndices.Clear();
-                                        optimizeVertices.Add(new List<Vertex>());
-                                    }
                                     optimizeIndices.Add(new List<uint>());
-                                    clusterChildrenTypes.Add(reachedRoot ? 0x3u : 0x2u);
-                                    clusterChildrenErrors.Add(math.f32tof16(ComputeLODProjectionError(selfError)));
+                                    clusterTypes.Add(reachedRoot ? 0x3u : 0x2u);
+                                    clusterErrors.Add(math.f32tof16(ComputeLODProjectionError(selfError)));
 
                                     // gather indices
                                     for (int i = 0; i < meshletsLODX[m].triangleCount; i++)
@@ -674,19 +643,7 @@ namespace Unity.VirtualMesh.Editor
                                             var index = copyIndices.IndexOf(vertexIndex);
                                             if (index == -1) // not found
                                             {
-                                                if (k_PackClusterGroupVertices)
-                                                    Debug.LogError($"[Virtual Mesh] Found index on parent cluster not belonging to any child");
-                                                else
-                                                {
-                                                    index = copyIndices.Count;
-                                                    copyIndices.Add(vertexIndex);
-
-                                                    if (!k_PackClusterGroupVertices)
-                                                    {
-                                                        optimizeVertexCount++;
-                                                        optimizeVertices.Last().Add(verticesLOD0[vertexIndex]);
-                                                    }
-                                                }
+                                                Debug.LogError($"[Virtual Mesh] Found index on parent cluster not belonging to any child");
                                             }
                                             optimizeIndexCount++;
                                             optimizeIndices.Last().Add((uint)index);
@@ -706,9 +663,6 @@ namespace Unity.VirtualMesh.Editor
                                 lodIndices.AddRange(lodIndicesResized);
                             }
                         }
-
-                        clusterTypes.AddRange(clusterChildrenTypes);
-                        clusterErrors.AddRange(clusterChildrenErrors);
 
                         // select page
                         int selectedPageIndex = 0;
@@ -735,35 +689,23 @@ namespace Unity.VirtualMesh.Editor
                         }
 
                         // merge buffers and optimize for locality
-                        int indexValueOffset = 0, vertexValueOffset = 0;
+                        int indexValueOffset = 0;
                         var optimizedIB = new uint[optimizeIndexCount];
-                        var optimizedVB = k_PackClusterGroupVertices ? optimizeVerticesPacked.ToArray() : new Vertex[optimizeVertexCount];
+                        var optimizedVB = optimizeVerticesPacked.ToArray();
                         for (int i = optimizeIndices.Count - 1; i >= 0; i--)
                         {
                             var indexBuffer = optimizeIndices[i].ToArray();
                             MeshOperations.SpatialSortTriangles(indexBuffer, optimizedVB, bakingVertexByteSize);
-                            MeshOperations.OptimizeVertexCache(indexBuffer, k_PackClusterGroupVertices ? (uint)optimizeVerticesPacked.Count : (uint)optimizeVertices[i].Count);
+                            MeshOperations.OptimizeVertexCache(indexBuffer, (uint)optimizeVerticesPacked.Count);
                             MeshOperations.OptimizeOverdraw(indexBuffer, optimizedVB, bakingVertexByteSize, 1.0f);
-
-                            if (!k_PackClusterGroupVertices)
-                            {
-                                var vertexBuffer = optimizeVertices[i].ToArray();
-                                MeshOperations.OptimizeVertexFetch(indexBuffer, vertexBuffer, bakingVertexByteSize);
-
-                                Array.Copy(vertexBuffer, 0, optimizedVB, vertexValueOffset, vertexBuffer.Length);
-                                vertexValueOffset += vertexBuffer.Length;
-                            }
 
                             Array.Copy(indexBuffer, 0, optimizedIB, indexValueOffset, indexBuffer.Length);
                             indexValueOffset += indexBuffer.Length;
                         }
-
-                        if (k_PackClusterGroupVertices)
-                            MeshOperations.OptimizeVertexFetch(optimizedIB, optimizedVB, bakingVertexByteSize);
+                        MeshOperations.OptimizeVertexFetch(optimizedIB, optimizedVB, bakingVertexByteSize);
 
                         // add group indices
                         indexValueOffset = 0;
-                        vertexValueOffset = 0;
                         int indexValueFetchOffset = 0;
                         for (int i = optimizeIndices.Count - 1; i >= 0; i--)
                         {
@@ -794,13 +736,11 @@ namespace Unity.VirtualMesh.Editor
                             int dataStart = memoryPageData[selectedPageIndex].dataNativeArray.Length;
                             memoryPageData[selectedPageIndex].ReserveAdditionalData(4);
                             memoryPageData[selectedPageIndex].SetData(dataStart + 0, memoryPageData[selectedPageIndex].indexValueCount + (uint)indexValueOffset);
-                            memoryPageData[selectedPageIndex].SetData(dataStart + 1, memoryPageData[selectedPageIndex].vertexValueCount + (k_PackClusterGroupVertices ? 0 : (uint)vertexValueOffset));
+                            memoryPageData[selectedPageIndex].SetData(dataStart + 1, memoryPageData[selectedPageIndex].vertexValueCount);
                             memoryPageData[selectedPageIndex].SetData(dataStart + 2, (uint)optimizeIndices[i].Count << 24 | (lodMask & 0xffffff));
                             memoryPageData[selectedPageIndex].SetData(dataStart + 3, clusterErrors[i]);
 
                             indexValueOffset += k_PackIndices ? optimizeIndices[i].Count / 3 : optimizeIndices[i].Count;
-                            if (!k_PackClusterGroupVertices)
-                                vertexValueOffset += optimizeVertices[i].Count * 2;
                             indexValueFetchOffset += optimizeIndices[i].Count;
                         }
 
