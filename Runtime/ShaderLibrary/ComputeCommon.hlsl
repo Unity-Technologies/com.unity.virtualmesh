@@ -56,8 +56,32 @@ ByteAddressBuffer VertexPositionBuffer;
 groupshared uint FeedbackSortLDS[MaxMemoryPageCount];
 groupshared uint TriangleCounterLDS = 0;
 groupshared uint MaterialIndexLDS;
+groupshared uint3 InstanceDataLDS;
 groupshared uint OffsetDataLDS;
 groupshared uint MaterialScanCounterLDS = 0;
+groupshared uint IndexCounterLDS = 0;
+
+uint3 UnpackTriangleIndices(uint index, uint2 offset, bool unpackIndices)
+{
+    if (unpackIndices)
+    {
+        uint packedIndices = TriangleBuffer.Load((index + offset.x) * 4);
+        return mad(uint3(packedIndices, packedIndices >> 10, packedIndices >> 20) & 0x3ff, 2, offset.y);
+    }
+    else
+    {
+        if (index % 2 == 0)
+        {
+            uint2 packedIndices = TriangleBuffer.Load2((index * 3 / 2 + offset.x) * 4);
+            return mad(uint3(packedIndices.x >> 16, packedIndices.x & 0xffff, packedIndices.y >> 16), 2, offset.y);
+        }
+        else
+        {
+            uint2 packedIndices = TriangleBuffer.Load2((mad(index, 3, -1) / 2 + offset.x) * 4);
+            return mad(uint3(packedIndices.x & 0xffff, packedIndices.y >> 16, packedIndices.y & 0xffff), 2, offset.y);
+        }
+    }
+}
 
 uint ReadTriangleVisibility(uint index)
 {

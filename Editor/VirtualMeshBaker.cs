@@ -15,6 +15,7 @@ namespace Unity.VirtualMesh.Editor
         private bool m_BakeInactiveObjects = false;
         private bool m_BakeOpaqueObjectsOnly = true;
         private float m_SimplificationTargetError = 0.005f;
+        private uint m_PartitionTargetSize = 16;
 
         /// <summary>
         /// Sets up or processes the scene before baking if needed.
@@ -31,7 +32,7 @@ namespace Unity.VirtualMesh.Editor
         public static void OpenWindow()
         {
             VirtualMeshBaker window = GetWindow<VirtualMeshBaker>();
-            window.titleContent = new GUIContent("VirtualMeshBaker");
+            window.titleContent = new GUIContent("Virtual Mesh Baker");
             window.minSize = new Vector2(450, 200);
             window.maxSize = new Vector2(1920, 720);
         }
@@ -62,7 +63,7 @@ namespace Unity.VirtualMesh.Editor
             if (VirtualMeshBakerAPI.GetFilterList(m_RootObject, filters, m_BakeInactiveObjects))
             {
                 VirtualMeshBakerAPI.EnsureCacheAndSaveDirectories();
-                VirtualMeshBakerAPI.ConvertMeshes(filters, m_BakeOpaqueObjectsOnly, m_SimplificationTargetError);
+                VirtualMeshBakerAPI.ConvertMeshes(filters, m_BakeOpaqueObjectsOnly, m_SimplificationTargetError, m_PartitionTargetSize);
 
                 AssetDatabase.Refresh();
             }
@@ -79,7 +80,7 @@ namespace Unity.VirtualMesh.Editor
             {
                 VirtualMeshBakerAPI.EnsureCacheAndSaveDirectories(true);
                 if (VirtualMeshBakerAPI.ConvertShaders(filters, m_BakeOpaqueObjectsOnly))
-                    VirtualMeshBakerAPI.ConvertMeshes(filters, m_BakeOpaqueObjectsOnly, m_SimplificationTargetError);
+                    VirtualMeshBakerAPI.ConvertMeshes(filters, m_BakeOpaqueObjectsOnly, m_SimplificationTargetError, m_PartitionTargetSize);
 
                 AssetDatabase.Refresh();
             }
@@ -134,6 +135,17 @@ namespace Unity.VirtualMesh.Editor
                     m_SimplificationTargetError = simplificationErrorTargetSlider.value;
                 });
             root.Add(simplificationErrorTargetSlider);
+
+            var partitionTargetSizeSlider = new SliderInt("Cluster Partition Target Size", 4, 64);
+            partitionTargetSizeSlider.tooltip = "Sets the target number of clusters to group together as leaf nodes when building LOD hierarchies.";
+            partitionTargetSizeSlider.labelElement.style.width = 300;
+            partitionTargetSizeSlider.value = 16;
+            partitionTargetSizeSlider.showInputField = true;
+            partitionTargetSizeSlider.RegisterValueChangedCallback(
+                evt => {
+                    m_PartitionTargetSize = (uint)partitionTargetSizeSlider.value;
+                });
+            root.Add(partitionTargetSizeSlider);
 
             var convertShadersButton = new Button(BakeShaders);
             convertShadersButton.text = "Bake Shaders Only";

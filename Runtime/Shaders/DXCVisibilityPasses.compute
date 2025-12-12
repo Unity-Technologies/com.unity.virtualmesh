@@ -31,9 +31,6 @@
 #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Shadows.hlsl"
 #include "Packages/com.unity.virtualmesh/Runtime/ShaderLibrary/ComputeCommon.hlsl"
 
-groupshared uint3 InstanceDataLDS;
-groupshared uint IndexCounterLDS = 0;
-
 [numthreads(MaxMemoryPageCount, 1, 1)]
 void FeedbackSortPass(uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID, uint gid : SV_GroupIndex)
 {
@@ -116,7 +113,7 @@ void ClusterOcclusionPass(uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_Grou
     instanceData.xy = mad((uint2)pageIndex, uint2(IndexValuePageStride, VertexValuePageStride), instanceData.xy);
     
     uint indexCount = ((instanceData.z >> 26) + 1) * 3;
-    uint groupID = mad(pageIndex, GroupDataValuePageStride, (instanceData.z & 0x3ffffff) >> 4);
+    uint groupID = mad(pageIndex, GroupDataValuePageStride, instanceData.z & 0x3fffff);
 
 	// compiler should skip the f32 conversions
     uint4 gdata = GroupDataBuffer.Load4(groupID * 16);
@@ -124,7 +121,7 @@ void ClusterOcclusionPass(uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_Grou
     half3 posExtent = (half3)f16tof32(gdata.xyz);
     half posRadius = length(posExtent);
     uint materialID = gdata.w >> 16;
-    uint lodType = instanceData.z & 0x3;
+    uint lodType = (instanceData.z >> 23) & 0x3;
 
 	// select LODs
     half2 error = mad((half2)LODProjectionErrorFactor, distance((half3)_WorldSpaceCameraPos, posCenter) - posRadius, -half2(f16tof32(instanceData.w), f16tof32(instanceData.w >> 16)));
@@ -194,7 +191,7 @@ void ClusterOcclusionPass(uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_Grou
             uint currentIndex;
             DispatchArgsBufferUAV.InterlockedAdd(0, 1, currentIndex);
 #endif
-            TriangleDataBufferUAV.Store3(currentIndex * 12, uint3(instanceData.xy, (instanceData.z & ~0x3ffffff) | materialID));
+            TriangleDataBufferUAV.Store3(currentIndex * 12, uint3(instanceData.xy, (instanceData.z & ~0x3fffff) | materialID));
         }
     }
 }
@@ -208,7 +205,7 @@ void TriangleOcclusionPass(uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_Gro
         uint instanceID = gid.x;
         uint3 instanceData = TriangleDataBufferSRV.Load3(instanceID * 12);
 
-        MaterialIndexLDS = instanceData.z & 0x3ffffff;
+        MaterialIndexLDS = instanceData.z & 0x3fffff;
         InstanceDataLDS = instanceData;
         TriangleCounterLDS = 0;
     }
@@ -232,9 +229,7 @@ void TriangleOcclusionPass(uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_Gro
 #endif
 	{
 		// fetch triangle indices
-        uint packedIndices = TriangleBuffer.Load((triangleID + InstanceDataLDS.x) * 4);
-        indices = uint3(packedIndices, packedIndices >> 10, packedIndices >> 20) & 0x3ff;
-        indices = mad(indices, 2, InstanceDataLDS.y);
+        indices = UnpackTriangleIndices(triangleID, InstanceDataLDS.xy, (InstanceDataLDS.z >> 25) & 0x1);
 
 		// fetch vertices
         uint2 vdata;
@@ -367,7 +362,7 @@ void TrianglePreparePass(uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_Group
         uint instanceID = gid.x;
         uint3 instanceData = TriangleDataBufferSRV.Load3(instanceID * 12);
 
-        MaterialIndexLDS = instanceData.z & 0x3ffffff;
+        MaterialIndexLDS = instanceData.z & 0x3fffff;
         InstanceDataLDS = instanceData;
         TriangleCounterLDS = 0;
     }
@@ -392,9 +387,7 @@ void TrianglePreparePass(uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_Group
         if (ReadTriangleVisibility(mad(triangleID, 3, InstanceDataLDS.x) / 3))
         {
 			// fetch triangle indices
-            uint packedIndices = TriangleBuffer.Load((triangleID + InstanceDataLDS.x) * 4);
-            indices = uint3(packedIndices, packedIndices >> 10, packedIndices >> 20) & 0x3ff;
-            indices = mad(indices, 2, InstanceDataLDS.y);
+            indices = UnpackTriangleIndices(triangleID, InstanceDataLDS.xy, (InstanceDataLDS.z >> 25) & 0x1);
 			
 #if defined(VMESH_DXC_FEATURES)
 			uint localCount = WaveActiveSum(3);
@@ -462,9 +455,7 @@ void ShadowTriangleOcclusionPass(uint3 dtid : SV_DispatchThreadID, uint3 gtid : 
 #endif
 	{
 		// fetch triangle indices
-        uint packedIndices = TriangleBuffer.Load((triangleID + InstanceDataLDS.x) * 4);
-        indices = uint3(packedIndices, packedIndices >> 10, packedIndices >> 20) & 0x3ff;
-        indices = mad(indices, 2, InstanceDataLDS.y);
+        indices = UnpackTriangleIndices(triangleID, InstanceDataLDS.xy, (InstanceDataLDS.z >> 25) & 0x1);
 
 		// fetch vertices
         uint2 vdata;

@@ -50,7 +50,6 @@ namespace Unity.VirtualMesh.Editor
 
         const bool k_SimplifyPlaceholders = true;
         const bool k_ExportOBJ = false;
-        const bool k_PackIndices = true;
 
         /// <summary>
         /// Fills a list of MeshFilter objects that should be baked based on a root object specified by the user.
@@ -307,7 +306,7 @@ namespace Unity.VirtualMesh.Editor
         /// <param name="meshFilters">List of MeshFilters to bake.</param>
         /// <param name="bakeOpaqueObjectsOnly">Flag to indicate if only objects with opaque render queues should be baked.</param>
         /// <param name="simplificationTargetError">Flag to indicate if only objects with opaque render queues should be baked.</param>
-        public static void ConvertMeshes(List<MeshFilter> meshFilters, bool bakeOpaqueObjectsOnly = true, float simplificationTargetError = 0.01f)
+        public static void ConvertMeshes(List<MeshFilter> meshFilters, bool bakeOpaqueObjectsOnly = true, float simplificationTargetError = 0.01f, uint partitionTargetSize = 16)
         {
             var materials = new List<Material>();
             var materialData = new List<MaterialData>();
@@ -457,6 +456,9 @@ namespace Unity.VirtualMesh.Editor
                         indices.Add((uint)indices.Count);
                     }
 
+                    // pack indices into 10 bits if the mesh is small enough
+                    bool packIndices = vertices.Count <= 1024;
+
                     // optimize and process LOD0
                     var result = MeshOperations.Reindex(vertices.ToArray(), indices.ToArray(), bakingVertexByteSize);
                     var verticesLOD0 = result.Item1;
@@ -494,7 +496,6 @@ namespace Unity.VirtualMesh.Editor
 
                         meshletSizesLOD0[i] = meshlet.triangleCount * 3;
                     }
-                    uint partitionTargetSize = k_PackIndices ? 5 : 16; // max is 5 for packed indices for now (2^10 indices = 1024 verts = 5 leaf clusters of 192 indices)
                     var partitionCountLOD0 = MeshOperations.PartitionMeshlets(meshletPartition, meshletIndicesLOD0.ToArray(), meshletSizesLOD0, verticesLOD0, partitionTargetSize);
 
                     var meshlets = new List<Meshlet>[partitionCountLOD0];
@@ -706,35 +707,52 @@ namespace Unity.VirtualMesh.Editor
 
                         // add group indices
                         indexValueOffset = 0;
-                        int indexValueFetchOffset = 0;
+                        int indexFetchOffset = 0;
                         for (int i = optimizeIndices.Count - 1; i >= 0; i--)
                         {
-                            memoryPageData[selectedPageIndex].ReserveAdditionalIndices(k_PackIndices ? optimizeIndices[i].Count / 3 : optimizeIndices[i].Count);
+                            int indexCount = optimizeIndices[i].Count;
+                            int indexValueCount = packIndices ? indexCount / 3 : indexCount % 2 == 0 ? indexCount / 2 : (indexCount + 1) / 2;
+                            memoryPageData[selectedPageIndex].ReserveAdditionalIndices(indexValueCount);
 
-                            if (k_PackIndices)
-                                for (int j = 0; j < optimizeIndices[i].Count; j += 3)
+                            if (packIndices)
+                            {
+                                for (int j = 0; j < indexCount; j += 3)
                                 {
-                                    uint packedIndex = 0;
-                                    packedIndex |= optimizedIB[indexValueOffset * 3 + j + 0] & 0x3ff;
-                                    packedIndex |= (optimizedIB[indexValueOffset * 3 + j + 1] << 10) & 0xffc00;
-                                    packedIndex |= (optimizedIB[indexValueOffset * 3 + j + 2] << 20) & 0x3ff00000;
-
-                                    if (optimizeIndices[i][j + 0] > 0x3ff || optimizeIndices[i][j + 1] > 0x3ff || optimizeIndices[i][j + 2] > 0x3ff)
+                                    if (optimizedIB[indexFetchOffset + j + 0] > 0x3ff || optimizedIB[indexFetchOffset + j + 1] > 0x3ff || optimizedIB[indexFetchOffset + j + 2] > 0x3ff)
                                         Debug.LogError("[Virtual Mesh] WARNING: Can't pack index values into 10 bits");
 
+                                    uint packedIndex = 0;
+                                    packedIndex |= optimizedIB[indexFetchOffset + j + 0] & 0x3ff;
+                                    packedIndex |= (optimizedIB[indexFetchOffset + j + 1] << 10) & 0xffc00;
+                                    packedIndex |= (optimizedIB[indexFetchOffset + j + 2] << 20) & 0x3ff00000;
                                     memoryPageData[selectedPageIndex].SetIndex((int)memoryPageData[selectedPageIndex].indexValueCount + indexValueOffset + j / 3, packedIndex);
                                 }
+                            }
                             else
-                                for (int j = 0; j < optimizeIndices[i].Count; j++)
-                                    memoryPageData[selectedPageIndex].SetIndex((int)memoryPageData[selectedPageIndex].indexValueCount + indexValueOffset + j, optimizedIB[indexValueFetchOffset + j]);
+                            {
+                                for (int j = 0; j < indexCount; j += 6)
+                                {
+                                    if (j + 6 > indexCount)
+                                    {
+                                        memoryPageData[selectedPageIndex].SetIndex((int)memoryPageData[selectedPageIndex].indexValueCount + indexValueOffset + j / 2 + 0, optimizedIB[indexFetchOffset + j + 0] << 16 | optimizedIB[indexFetchOffset + j + 1]);
+                                        memoryPageData[selectedPageIndex].SetIndex((int)memoryPageData[selectedPageIndex].indexValueCount + indexValueOffset + j / 2 + 1, optimizedIB[indexFetchOffset + j + 2] << 16);
 
-                            if (optimizeIndices[i].Count / 3 > 64)
-                                Debug.LogError($"[Virtual Mesh] WARNING: Can't pack cluster triangle count into 6 bits, the detected index count is {optimizeIndices[i].Count}");
+                                        break;
+                                    }
+
+                                    memoryPageData[selectedPageIndex].SetIndex((int)memoryPageData[selectedPageIndex].indexValueCount + indexValueOffset + j / 2 + 0, optimizedIB[indexFetchOffset + j + 0] << 16 | optimizedIB[indexFetchOffset + j + 1]);
+                                    memoryPageData[selectedPageIndex].SetIndex((int)memoryPageData[selectedPageIndex].indexValueCount + indexValueOffset + j / 2 + 1, optimizedIB[indexFetchOffset + j + 2] << 16 | optimizedIB[indexFetchOffset + j + 3]);
+                                    memoryPageData[selectedPageIndex].SetIndex((int)memoryPageData[selectedPageIndex].indexValueCount + indexValueOffset + j / 2 + 2, optimizedIB[indexFetchOffset + j + 4] << 16 | optimizedIB[indexFetchOffset + j + 5]);
+                                }
+                            }
+
+                            if (indexCount / 3 > 64)
+                                Debug.LogError($"[Virtual Mesh] WARNING: Can't pack cluster triangle count into 6 bits, the detected index count is {indexCount}");
 
                             if (memoryPageData[selectedPageIndex].totalGroupCount > 4194303)
                                 Debug.LogError($"[Virtual Mesh] WARNING: Can't pack group index into 22 bits, the detected index is {memoryPageData[selectedPageIndex].totalGroupCount}");
 
-                            uint countMask = ((uint)optimizeIndices[i].Count / 3 - 1) << 26 | memoryPageData[selectedPageIndex].totalGroupCount << 4 | clusterTypes[i];
+                            uint countMask = ((uint)indexCount / 3 - 1) << 26 | (packIndices ? 0x1u : 0x0u) << 25 | clusterTypes[i] << 23 | memoryPageData[selectedPageIndex].totalGroupCount;
 
                             int dataStart = memoryPageData[selectedPageIndex].dataNativeArray.Length;
                             memoryPageData[selectedPageIndex].ReserveAdditionalData(4);
@@ -743,8 +761,8 @@ namespace Unity.VirtualMesh.Editor
                             memoryPageData[selectedPageIndex].SetData(dataStart + 2, countMask);
                             memoryPageData[selectedPageIndex].SetData(dataStart + 3, clusterErrors[i]);
 
-                            indexValueOffset += k_PackIndices ? optimizeIndices[i].Count / 3 : optimizeIndices[i].Count;
-                            indexValueFetchOffset += optimizeIndices[i].Count;
+                            indexValueOffset += indexValueCount;
+                            indexFetchOffset += indexCount;
                         }
 
                         // add group vertices
