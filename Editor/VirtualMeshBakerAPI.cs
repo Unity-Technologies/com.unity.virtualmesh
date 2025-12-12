@@ -728,16 +728,19 @@ namespace Unity.VirtualMesh.Editor
                                 for (int j = 0; j < optimizeIndices[i].Count; j++)
                                     memoryPageData[selectedPageIndex].SetIndex((int)memoryPageData[selectedPageIndex].indexValueCount + indexValueOffset + j, optimizedIB[indexValueFetchOffset + j]);
 
-                            uint lodMask = memoryPageData[selectedPageIndex].totalGroupCount << 2 | clusterTypes[i];
+                            if (optimizeIndices[i].Count / 3 > 64)
+                                Debug.LogError($"[Virtual Mesh] WARNING: Can't pack cluster triangle count into 6 bits, the detected index count is {optimizeIndices[i].Count}");
 
-                            if (optimizeIndices[i].Count > 256)
-                                Debug.LogError($"[Virtual Mesh] WARNING: Can't pack cluster index count into 8 bits, the detected value is {optimizeIndices[i].Count}");
+                            if (memoryPageData[selectedPageIndex].totalGroupCount > 4194303)
+                                Debug.LogError($"[Virtual Mesh] WARNING: Can't pack group index into 22 bits, the detected index is {memoryPageData[selectedPageIndex].totalGroupCount}");
+
+                            uint countMask = ((uint)optimizeIndices[i].Count / 3 - 1) << 26 | memoryPageData[selectedPageIndex].totalGroupCount << 4 | clusterTypes[i];
 
                             int dataStart = memoryPageData[selectedPageIndex].dataNativeArray.Length;
                             memoryPageData[selectedPageIndex].ReserveAdditionalData(4);
                             memoryPageData[selectedPageIndex].SetData(dataStart + 0, memoryPageData[selectedPageIndex].indexValueCount + (uint)indexValueOffset);
                             memoryPageData[selectedPageIndex].SetData(dataStart + 1, memoryPageData[selectedPageIndex].vertexValueCount);
-                            memoryPageData[selectedPageIndex].SetData(dataStart + 2, (uint)optimizeIndices[i].Count << 24 | (lodMask & 0xffffff));
+                            memoryPageData[selectedPageIndex].SetData(dataStart + 2, countMask);
                             memoryPageData[selectedPageIndex].SetData(dataStart + 3, clusterErrors[i]);
 
                             indexValueOffset += k_PackIndices ? optimizeIndices[i].Count / 3 : optimizeIndices[i].Count;
