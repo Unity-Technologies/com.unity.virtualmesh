@@ -111,18 +111,12 @@ namespace Unity.VirtualMesh.Runtime
         private const int k_MemoryPageMaxInstanceCount = 1600;
 
         [SerializeField]
-        private bool m_Enable = true;
-
-        [SerializeField]
         private ComputeShader m_CopyPassesShader;
 
         [SerializeField]
         private Material m_PlaceholderMaterial;
 
         private Mesh m_BoundingMesh;
-        private Bounds m_Bounds = new Bounds(Vector3.zero, 10000.0f * Vector3.one);
-
-        private VirtualMeshRenderFeature m_VirtualMeshRenderFeature;
 
         private NativeArray<MemoryPageStatus> m_MemoryPageStatus;
 
@@ -150,9 +144,7 @@ namespace Unity.VirtualMesh.Runtime
 
         private bool m_Initialized = false;
         private bool m_HeaderJobRunning = false;
-        private bool m_HeaderLoaded = false;
         private bool[] m_DataJobRunning;
-        private bool m_MaterialsLoaded = false;
 
         private int m_MemoryPageCount = 0;
         private int m_LoadableMemoryPageCount = 128;
@@ -341,86 +333,102 @@ namespace Unity.VirtualMesh.Runtime
         /// <summary>
         /// Checks if the virtual mesh runtime has been initialized.
         /// </summary>
-        public bool IsInitialized => m_Initialized && m_HeaderLoaded && m_MaterialsLoaded;
+        public bool IsInitialized => m_Initialized;
 
         /// <summary>
         /// Checks if the virtual mesh runtime is enabled.
         /// </summary>
-		public bool IsEnabled
-		{
-			get => m_Enable;
-			set { m_Enable = value; }
-		}
+        public bool IsEnabled = true;
+
+        /// <summary>
+        /// Checks if disoccluded virtual meshes should be rendered with an internal pass instead of the URP opaque pass.
+        /// </summary>
+        public bool IsInternalDrawPassEnabled = true;
+
+        /// <summary>
+        /// Checks if the empty bounding mesh surrounding virtual meshes is enabled.
+        /// </summary>
+        public bool IsBoundingMeshEnabled;
+
+        /// <summary>
+        /// Checks if the placeholder system is enabled.
+        /// </summary>
+        public bool IsPlaceholderEnabled;
+
+        /// <summary>
+        /// Checks if the debug rendering view is enabled.
+        /// </summary>
+        public bool IsDebugViewEnabled;
 
         /// <summary>
         /// The constant buffer containing stride values to index into memory page buffers that contain virtual mesh data.
         /// </summary>
-		public ref GraphicsBuffer PageStrideConstantBuffer => ref m_PageStrideConstants;
+		public GraphicsBuffer PageStrideConstantBuffer => m_PageStrideConstants;
 
         /// <summary>
         /// The buffer that contains all the metadata read from memory page headers.
         /// </summary>
-        public ref GraphicsBuffer PageDataBuffer => ref m_PageDataBuffer;
+        public GraphicsBuffer PageDataBuffer => m_PageDataBuffer;
 
         /// <summary>
         /// The buffer that contains all the vertex positions loaded from memory pages.
         /// </summary>
-        public ref GraphicsBuffer VertexPositionBuffer => ref m_VertexPositionBuffer;
+        public GraphicsBuffer VertexPositionBuffer => m_VertexPositionBuffer;
 
         /// <summary>
         /// The buffer that contains all the vertex attributes loaded from memory pages.
         /// </summary>
-        public ref GraphicsBuffer VertexAttributeBuffer => ref m_VertexAttributeBuffer;
+        public GraphicsBuffer VertexAttributeBuffer => m_VertexAttributeBuffer;
 
         /// <summary>
         /// The buffer that contains all the triangle indices loaded from memory pages.
         /// </summary>
-        public ref GraphicsBuffer IndexBuffer => ref m_IndexBuffer;
+        public GraphicsBuffer IndexBuffer => m_IndexBuffer;
 
         /// <summary>
         /// The buffer that contains the post-culling compacted triangle indices ready for drawing use.
         /// </summary>
-        public ref GraphicsBuffer CompactedIndexBuffer => ref m_CompactedIndexBuffer;
+        public GraphicsBuffer CompactedIndexBuffer => m_CompactedIndexBuffer;
 
         /// <summary>
         /// The buffer that contains one-bit flags representing triangle visibility for the previous frame.
         /// </summary>
-        public ref GraphicsBuffer PreviousTriangleVisibilityBuffer => ref m_TriangleVisibilityBuffer[m_PingPongBufferIndex % 2];
+        public GraphicsBuffer PreviousTriangleVisibilityBuffer => m_TriangleVisibilityBuffer[m_PingPongBufferIndex % 2];
 
         /// <summary>
         /// The buffer that contains one-bit flags representing triangle visibility for the current frame.
         /// </summary>
-        public ref GraphicsBuffer CurrentTriangleVisibilityBuffer => ref m_TriangleVisibilityBuffer[(m_PingPongBufferIndex + 1) % 2];
+        public GraphicsBuffer CurrentTriangleVisibilityBuffer => m_TriangleVisibilityBuffer[(m_PingPongBufferIndex + 1) % 2];
 
         /// <summary>
         /// The buffer that contains all the per-LOD hierarchy metadata loaded from memory pages.
         /// </summary>
-        public ref GraphicsBuffer GroupDataBuffer => ref m_GroupDataBuffer;
+        public GraphicsBuffer GroupDataBuffer => m_GroupDataBuffer;
 
         /// <summary>
         /// The buffer that contains all the per-cluster metadata loaded from memory pages.
         /// </summary>
-        public ref GraphicsBuffer InstanceDataBuffer => ref m_InstanceDataBuffer;
+        public GraphicsBuffer InstanceDataBuffer => m_InstanceDataBuffer;
 
         /// <summary>
         /// The buffer that contains compacted per-cluster metadata for triangles that survived culling.
         /// </summary>
-        public ref GraphicsBuffer TriangleDataBuffer => ref m_TriangleDataBuffer;
+        public GraphicsBuffer TriangleDataBuffer => m_TriangleDataBuffer;
 
         /// <summary>
         /// The buffer that contains compacted per-cluster metadata for shadow caster triangles that survived culling.
         /// </summary>
-        public ref GraphicsBuffer ShadowTriangleDataBuffer => ref m_ShadowTriangleDataBuffer;
+        public GraphicsBuffer ShadowTriangleDataBuffer => m_ShadowTriangleDataBuffer;
 
         /// <summary>
         /// The buffer containing the memory page streaming decision data computed on the GPU and read back to the CPU.
         /// </summary>
-        public ref GraphicsBuffer FeedbackBuffer => ref m_FeedbackBuffer;
+        public GraphicsBuffer FeedbackBuffer => m_FeedbackBuffer;
 
         /// <summary>
         /// The buffer containing flags to indicate to the GPU if pages are currently being streamed or if they are ready to be processed.
         /// </summary>
-        public ref GraphicsBuffer PageStatusBuffer => ref m_PageStatusBuffer;
+        public GraphicsBuffer PageStatusBuffer => m_PageStatusBuffer;
 
         /// <summary>
         /// Updates the page status buffer based on a specific page's streaming condition.
@@ -469,32 +477,24 @@ namespace Unity.VirtualMesh.Runtime
         /// <summary>
         /// The indirect argument buffer used for indirect compute dispatches in the virtual mesh pipeline.
         /// </summary>
-        public ref GraphicsBuffer DispatchArgsBuffer => ref m_DispatchArgsBuffer;
+        public GraphicsBuffer DispatchArgsBuffer => m_DispatchArgsBuffer;
 
         /// <summary>
         /// The indirect argument buffer used for indirect draws in the virtual mesh pipeline.
         /// </summary>
-        public ref GraphicsBuffer DrawArgsBuffer
-        {
-            get
-            {
-                AllocateDrawBuffers();
-
-                return ref m_DrawArgsBuffer;
-            }
-        }
+        public GraphicsBuffer DrawArgsBuffer => m_DrawArgsBuffer;
 
         /// <summary>
         /// The indirect argument buffer used for indirect shadow caster draws in the virtual mesh pipeline.
         /// </summary>
-        public ref GraphicsBuffer ShadowDrawArgsBuffer => ref m_ShadowDrawArgsBuffer;
+        public GraphicsBuffer ShadowDrawArgsBuffer => m_ShadowDrawArgsBuffer;
 
         /// <summary>
         /// Processes the GPU's memory page streaming decision data and handles the streaming loop.
         /// </summary>
         public void FeedbackReadbackCallback(AsyncGPUReadbackRequest request)
         {
-            if (!m_Initialized || m_HeaderJobRunning || !m_HeaderLoaded || !m_MaterialsLoaded)
+            if (!m_Initialized || m_HeaderJobRunning)
                 return;
 
             if (request.hasError)
@@ -522,14 +522,14 @@ namespace Unity.VirtualMesh.Runtime
                                 m_UploadIndexQueue.Enqueue(index);
                                 status = MemoryPageStatus.Waiting;
 
-                                if (m_VirtualMeshRenderFeature != null && _ExternalActivatePlacholderCallback != null)
+                                if (IsPlaceholderEnabled && _ExternalActivatePlacholderCallback != null)
                                     _ExternalActivatePlacholderCallback(index);
                             }
                             else if (tooFar)
                             {
                                 status = MemoryPageStatus.TooFar;
 
-                                if (m_VirtualMeshRenderFeature != null && _ExternalActivatePlacholderCallback != null)
+                                if (IsPlaceholderEnabled && _ExternalActivatePlacholderCallback != null)
                                     _ExternalActivatePlacholderCallback(index);
                             }
                         }
@@ -546,7 +546,7 @@ namespace Unity.VirtualMesh.Runtime
                                 unload = true;
                                 status = MemoryPageStatus.TooFar;
 
-                                if (m_VirtualMeshRenderFeature != null && _ExternalActivatePlacholderCallback != null)
+                                if (IsPlaceholderEnabled && _ExternalActivatePlacholderCallback != null)
                                     _ExternalActivatePlacholderCallback(index);
                             }
                         }
@@ -565,7 +565,7 @@ namespace Unity.VirtualMesh.Runtime
                             {
                                 status = MemoryPageStatus.Unloaded;
 
-                                if (m_VirtualMeshRenderFeature != null && _ExternalDeactivatePlacholderCallback != null)
+                                if (IsPlaceholderEnabled && _ExternalDeactivatePlacholderCallback != null)
                                     _ExternalDeactivatePlacholderCallback(index);
                             }
                         }
@@ -585,7 +585,7 @@ namespace Unity.VirtualMesh.Runtime
                             {
                                 status = MemoryPageStatus.Unloaded;
 
-                                if (m_VirtualMeshRenderFeature != null && _ExternalDeactivatePlacholderCallback != null)
+                                if (IsPlaceholderEnabled && _ExternalDeactivatePlacholderCallback != null)
                                     _ExternalDeactivatePlacholderCallback(index);
                             }
                         }
@@ -607,7 +607,7 @@ namespace Unity.VirtualMesh.Runtime
                 m_MemoryPageStatus[index] = status;
             }
 
-            if (m_Enable)
+            if (IsEnabled)
             {
                 StreamingJobsKickoff();
                 StreamingJobsWrapup();
@@ -622,8 +622,6 @@ namespace Unity.VirtualMesh.Runtime
         {
             if (!IsInitialized)
                 return;
-
-            AllocateDrawBuffers();
 
             for (int i = 0; i < m_Materials.Length; i++)
             {
@@ -656,7 +654,7 @@ namespace Unity.VirtualMesh.Runtime
         /// </summary>
         private void DrawPlaceholders()
         {
-            if (!IsInitialized || m_VirtualMeshRenderFeature == null || !m_VirtualMeshRenderFeature.settings.enablePlaceholders)
+            if (!IsInitialized || !IsPlaceholderEnabled)
                 return;
 
 			if (_ExternalPlaceholdersCallback != null)
@@ -823,7 +821,7 @@ namespace Unity.VirtualMesh.Runtime
         /// </summary>
         private bool RequestHeaders()
         {
-            if (!m_Initialized || m_HeaderJobRunning)
+            if (m_HeaderJobRunning)
                 return false;
 
             LoadMeshHeaderJob job = new LoadMeshHeaderJob
@@ -847,9 +845,6 @@ namespace Unity.VirtualMesh.Runtime
         /// </summary>
         private bool RequestMaterials()
         {
-            if (!m_Initialized)
-                return false;
-
             // load materials
             m_MaterialAssetBundle = AssetBundle.LoadFromFile($"{Application.streamingAssetsPath}/{ResourcePathDefinitions.materialBundleFullPath}");
             if (m_MaterialAssetBundle == null)
@@ -868,7 +863,7 @@ namespace Unity.VirtualMesh.Runtime
             {
                 var param = new RenderParams(m_Materials[i]);
                 param.camera = GetComponent<Camera>();
-                param.worldBounds = m_Bounds;
+                param.worldBounds = m_BoundingMesh.bounds;
                 param.shadowCastingMode = ShadowCastingMode.Off; // vmesh shadow maps use a custom pass
                 param.receiveShadows = true;
 
@@ -878,8 +873,6 @@ namespace Unity.VirtualMesh.Runtime
 
                 m_RenderParams[i] = param;
             }
-
-            m_MaterialsLoaded = true;
 
 #if UNITY_EDITOR
             Debug.Log($"[Virtual Mesh] Retrieved {m_Materials.Length} different materials");
@@ -953,14 +946,11 @@ namespace Unity.VirtualMesh.Runtime
         /// </summary>
         private void AllocateDrawBuffers()
         {
-            if (m_DrawArgsBuffer == null || !m_DrawArgsBuffer.IsValid())
-            {
-                var drawArgs = new GraphicsBuffer.IndirectDrawIndexedArgs[m_Materials.Length];
-                for (int i = 0; i < m_Materials.Length; i++)
-                    drawArgs[i] = new GraphicsBuffer.IndirectDrawIndexedArgs { instanceCount = 1 };
-                m_DrawArgsBuffer = new GraphicsBuffer(GraphicsBuffer.Target.IndirectArguments, m_Materials.Length, GraphicsBuffer.IndirectDrawIndexedArgs.size);
-                m_DrawArgsBuffer.SetData(drawArgs);
-            }
+            var drawArgs = new GraphicsBuffer.IndirectDrawIndexedArgs[m_Materials.Length];
+            for (int i = 0; i < m_Materials.Length; i++)
+                drawArgs[i] = new GraphicsBuffer.IndirectDrawIndexedArgs { instanceCount = 1 };
+            m_DrawArgsBuffer = new GraphicsBuffer(GraphicsBuffer.Target.IndirectArguments, m_Materials.Length, GraphicsBuffer.IndirectDrawIndexedArgs.size);
+            m_DrawArgsBuffer.SetData(drawArgs);
         }
 
         /// <summary>
@@ -1062,10 +1052,6 @@ namespace Unity.VirtualMesh.Runtime
             var dispatchArgs = new uint[6] { 0, 1, 1, 0, 1, 1 };
             m_DispatchArgsBuffer = new GraphicsBuffer(GraphicsBuffer.Target.IndirectArguments, 2, sizeof(uint) * 6);
             m_DispatchArgsBuffer.SetData(dispatchArgs);
-
-            AllocateShadowDrawBuffers();
-
-            m_Initialized = true;
         }
 
         /// <summary>
@@ -1086,8 +1072,6 @@ namespace Unity.VirtualMesh.Runtime
                     m_LoadMeshDataJobHandles[i].Complete();
                     m_DataJobRunning[i] = false;
                 }
-                    
-                m_HeaderLoaded = false;
             }
 
             AsyncGPUReadback.WaitAllRequests();
@@ -1222,7 +1206,7 @@ namespace Unity.VirtualMesh.Runtime
                     m_LoadedMemoryPages[m_SlotIDs[i]] = m_PageIDs[i];
                     DispatchStatusBufferUpdate(m_PageIDs[i], m_SlotIDs[i]);
 
-                    if (m_VirtualMeshRenderFeature != null && _ExternalDeactivatePlacholderCallback != null)
+                    if (IsPlaceholderEnabled && _ExternalDeactivatePlacholderCallback != null)
                         _ExternalDeactivatePlacholderCallback(m_PageIDs[i]);
 
                     // flag job as done
@@ -1321,40 +1305,20 @@ namespace Unity.VirtualMesh.Runtime
             if (RequestMetadata())
             {
                 AllocateData();
-                RequestMaterials();
 
-                s_Instance = this;
-
-                // we use reflection to get a reference to the render feature for checking flags and settings (TODO improve this)
+                if (RequestMaterials())
                 {
-                    var rpAsset = GraphicsSettings.defaultRenderPipeline as UniversalRenderPipelineAsset;
-                    var rendererDataListField = rpAsset.GetType().GetField("m_RendererDataList", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-                    var list = rendererDataListField.GetValue(rpAsset) as ScriptableRendererData[];
-                    var defaultRendererIndexField = rpAsset.GetType().GetField("m_DefaultRendererIndex", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-                    var defaultRendererIndex = (int)defaultRendererIndexField.GetValue(rpAsset);
+                    AllocateDrawBuffers();
+                    AllocateShadowDrawBuffers();
 
-                    var cameraData = GetComponent<UniversalAdditionalCameraData>();
-                    var rendererIndexField = cameraData.GetType().GetField("m_RendererIndex", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-                    var index = (int)rendererIndexField.GetValue(cameraData);
-
-                    var rendererData = index == -1 ? list[defaultRendererIndex] as UniversalRendererData : list[index] as UniversalRendererData;
-                    foreach (var feature in rendererData.rendererFeatures)
+                    if (RequestHeaders())
                     {
-                        if (feature is VirtualMeshRenderFeature)
-                        {
-							m_VirtualMeshRenderFeature = feature as VirtualMeshRenderFeature;
-                            break;
-                        }
+                        m_Initialized = true;
                     }
-
-#if UNITY_EDITOR
-                    if (m_VirtualMeshRenderFeature == null)
-                        Debug.LogError("[Virtual Mesh] No virtual mesh render feature was found on the camera's renderer");
-#endif
                 }
-
-                RequestHeaders();
             }
+
+            s_Instance = this;
         }
 
         void OnDisable()
@@ -1381,7 +1345,6 @@ namespace Unity.VirtualMesh.Runtime
             // only called once to intercept header jobs finishing
             if (m_HeaderJobRunning && m_LoadMeshHeaderJobHandle.IsCompleted)
             {
-                m_HeaderLoaded = true;
                 m_HeaderJobRunning = false;
 
                 var temp = new uint[m_MemoryPageCount * 4];
@@ -1401,18 +1364,19 @@ namespace Unity.VirtualMesh.Runtime
                 RequestPlaceholders();
             }
 
-            if (m_Enable)
+            if (IsEnabled)
             {
-                if (m_VirtualMeshRenderFeature != null && m_VirtualMeshRenderFeature.settings.enableBoundingMesh)
+                if (IsBoundingMeshEnabled)
                     DrawBoundingMesh();
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-                if (m_VirtualMeshRenderFeature != null && !m_VirtualMeshRenderFeature.settings.enableOcclusionDebugView)
+                if (!IsDebugViewEnabled && !IsInternalDrawPassEnabled)
 #endif
                 {
                     DrawVirtualMesh();
-                    DrawPlaceholders();
                 }
+
+                DrawPlaceholders();
             }
 
             m_PingPongBufferIndex = ++m_PingPongBufferIndex % 2;
@@ -1423,7 +1387,7 @@ namespace Unity.VirtualMesh.Runtime
 
         void OnGUI()
         {
-            if (!m_Initialized || !m_Enable)
+            if (!m_Initialized || !IsEnabled)
                 return;
 
             int unloaded = 0;

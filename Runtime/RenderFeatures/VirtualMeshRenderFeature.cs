@@ -23,11 +23,6 @@ namespace Unity.VirtualMesh.Runtime
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             public Material debugPassMaterial = null;
 #endif
-
-			public bool enableBoundingMesh;
-			public bool enableOcclusionDebugView;
-			public bool enablePlaceholders;
-
 #if UNITY_EDITOR
             public void EnsureAllUnityResources()
             {
@@ -44,6 +39,7 @@ namespace Unity.VirtualMesh.Runtime
         private DrawShadowPass m_DrawShadowPass;
         private RefreshDepthPyramidPass m_RefreshDepthPass;
         private VisibilityPass m_VisibilityPass;
+        private DrawPass m_DrawPass;
 
         public override void Create()
         {
@@ -54,6 +50,7 @@ namespace Unity.VirtualMesh.Runtime
             m_DrawShadowPass = new DrawShadowPass(name + " Draw Shadow Pass");
             m_RefreshDepthPass = new RefreshDepthPyramidPass(name + " Refresh Depth Pyramid Pass");
             m_VisibilityPass = new VisibilityPass(name + " Visibility Pass");
+            m_DrawPass = new DrawPass(name + " Draw Pass");
         }
 
         protected override void Dispose(bool disposing)
@@ -87,6 +84,14 @@ namespace Unity.VirtualMesh.Runtime
             m_VisibilityPass.renderPassEvent = RenderPassEvent.BeforeRenderingGbuffer;
             m_VisibilityPass.settings = settings;
             renderer.EnqueuePass(m_VisibilityPass);
+
+            if (VirtualMeshManager.Instance.IsInternalDrawPassEnabled)
+            {
+                // drawing should occur after visibility has been resolved
+                m_DrawPass.renderPassEvent = RenderPassEvent.BeforeRenderingGbuffer;
+                m_DrawPass.settings = settings;
+                renderer.EnqueuePass(m_DrawPass);
+            }
         }
     }
 
@@ -120,12 +125,6 @@ namespace Unity.VirtualMesh.Runtime
             m_ProfilingSampler = new ProfilingSampler(m_ProfilerTag);
 
             m_CascadeSlices = new ShadowSliceData[4];
-        }
-
-        public override void Configure(CommandBuffer cmd, RenderTextureDescriptor cameraTextureDescriptor)
-        {
-            // prevent clearing the shadow map as render target
-            ConfigureClear(ClearFlag.None, Color.black);
         }
 
         static void ExecutePass(PassData data, UnsafeGraphContext context)
@@ -216,9 +215,7 @@ namespace Unity.VirtualMesh.Runtime
                 passData.shadowTexture = resourceData.mainShadowsTexture;
                 passData.cascadeSlices = m_CascadeSlices;
 
-                //builder.UseGlobalTexture(Shader.PropertyToID("_MainLightShadowmapTexture"), AccessFlags.Write);
                 builder.UseTexture(passData.shadowTexture, AccessFlags.Write);
-                //builder.SetRenderAttachmentDepth(passData.shadowTexture, AccessFlags.Write);
 
                 builder.AllowPassCulling(false);
                 builder.AllowGlobalStateModification(true);
@@ -275,7 +272,7 @@ namespace Unity.VirtualMesh.Runtime
 
                 // render previous frame geometry
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-                if (data.settings.enableOcclusionDebugView)
+                if (VirtualMeshManager.Instance.IsDebugViewEnabled)
                 {
                     // needed for the debug visualisation pass
                     cmd.ClearRenderTarget(true, true, Color.black);
@@ -352,9 +349,10 @@ namespace Unity.VirtualMesh.Runtime
                     }
                 }
 
-				// blit depth to top mip
-				data.settings.customPassMaterial.SetTexture(VirtualMeshShaderProperties.DepthTexture, data.cameraDepth);
-				cmd.Blit(RenderTargetIdentifier.Invalid, data.settings.depthPyramid, data.settings.customPassMaterial, 2, 0); // we don't need a source so using an invalid identifier is okay
+                // blit depth to top mip
+                data.settings.customPassMaterial.SetTexture(VirtualMeshShaderProperties.DepthTexture, data.cameraDepth);
+                cmd.SetRenderTarget(new RenderTargetIdentifier(data.settings.depthPyramid, 0), RenderBufferLoadAction.DontCare, RenderBufferStoreAction.Store);
+                cmd.DrawProcedural(Matrix4x4.identity, data.settings.customPassMaterial, 1, MeshTopology.Triangles, 3, 1);
 
 				// build mip chain
 				int threadGroupCount = Mathf.CeilToInt(data.settings.depthPyramid.width / 16.0f);
@@ -561,6 +559,82 @@ namespace Unity.VirtualMesh.Runtime
                 passData.settings = settings;
                 passData.profilingSampler = m_ProfilingSampler;
                 passData.shadowCascadeCount = frameData.Get<UniversalShadowData>().mainLightShadowCascadesCount;
+
+                builder.AllowPassCulling(false);
+
+                builder.SetRenderFunc((PassData data, UnsafeGraphContext context) => ExecutePass(data, context));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Custom render pass to draw newly disoccluded geometry (second pass in the two-pass occlusion culling algorithm).
+    /// </summary>
+    internal class DrawPass : ScriptableRenderPass
+    {
+        public VirtualMeshRenderFeature.Settings settings;
+
+        private string m_ProfilerTag;
+        private ProfilingSampler m_ProfilingSampler;
+
+        private class PassData
+        {
+            internal VirtualMeshRenderFeature.Settings settings;
+            internal ProfilingSampler profilingSampler;
+        }
+
+        public DrawPass(string tag)
+        {
+            m_ProfilerTag = tag;
+            m_ProfilingSampler = new ProfilingSampler(m_ProfilerTag);
+        }
+
+        static void ExecutePass(PassData data, UnsafeGraphContext context)
+        {
+            var cmd = context.cmd;
+            using (new ProfilingScope(cmd, data.profilingSampler))
+            {
+                // draw geometry
+                for (int i = 0; i < VirtualMeshManager.Instance.Materials.Length; i++)
+                {
+                    uint vertexCount = VirtualMeshManager.Instance.MaterialVertexCounts[i];
+                    if (i > 0 && vertexCount == 0)
+                        continue;
+
+                    var material = VirtualMeshManager.Instance.Materials[i];
+
+                    // try to find the correct pass (TODO improve this)
+                    var pass = material.FindPass(data.settings.renderMode == RenderingPath.DeferredShading ? VirtualMeshShaderProperties.GBufferPassName : VirtualMeshShaderProperties.SGForwardPassName);
+                    if (pass == -1)
+                        pass = material.FindPass(VirtualMeshShaderProperties.LitForwardPassName);
+
+                    if (pass != -1)
+                        cmd.DrawProceduralIndirect(VirtualMeshManager.Instance.CompactedIndexBuffer, Matrix4x4.identity, material, pass, MeshTopology.Triangles, VirtualMeshManager.Instance.DrawArgsBuffer, i * VirtualMeshManager.Instance.DrawArgsBuffer.stride);
+                }
+            }
+        }
+
+        public override void RecordRenderGraph(RenderGraph renderGraph, ContextContainer frameData)
+        {
+            if (VirtualMeshManager.Instance == null || !VirtualMeshManager.Instance.IsInitialized)
+                return;
+
+            var resourceData = frameData.Get<UniversalResourceData>();
+
+            using (var builder = renderGraph.AddUnsafePass<PassData>(m_ProfilerTag, out var passData))
+            {
+                passData.settings = settings;
+                passData.profilingSampler = m_ProfilingSampler;
+
+                if (settings.renderMode == RenderingPath.DeferredShading)
+                {
+                    for (int i = 0; i < resourceData.gBuffer.Length; i++)
+                        builder.SetRenderAttachment(resourceData.gBuffer[i], i, AccessFlags.Write);
+                }
+                else
+                    builder.SetRenderAttachment(resourceData.cameraColor, 0, AccessFlags.Write);
+
+                builder.SetRenderAttachmentDepth(resourceData.cameraDepth, AccessFlags.Write);
 
                 builder.AllowPassCulling(false);
 
